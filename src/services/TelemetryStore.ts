@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite"
 import { mkdirSync } from "node:fs"
 import { dirname } from "node:path"
-import { Clock, Effect, Layer, ServiceMap } from "effect"
+import { Clock, Effect, Layer, Schedule, ServiceMap } from "effect"
 import { config } from "../config.js"
 import type { LogItem, SpanItem, TraceItem, TraceSpanEvent, TraceSpanItem } from "../domain.js"
 import { attributeMap, nanosToMilliseconds, parseAnyValue, spanKindLabel, spanStatusLabel, stringifyValue, type OtlpLogExportRequest, type OtlpTraceExportRequest } from "../otlp.js"
@@ -250,11 +250,14 @@ const defaultOptions: TelemetryStoreOptions = {
 	logFetchLimit: config.otel.logFetchLimit,
 }
 
-export const TelemetryStoreLive = Layer.sync(
+export const TelemetryStoreLive = Layer.effect(
 	TelemetryStore,
-	() => {
+	Effect.gen(function* () {
 		mkdirSync(dirname(config.otel.databasePath), { recursive: true })
-		const db = new Database(config.otel.databasePath, { create: true })
+		const db = yield* Effect.acquireRelease(
+			Effect.sync(() => new Database(config.otel.databasePath, { create: true })),
+			(db) => Effect.sync(() => db.close()),
+		)
 		db.exec(`
 			PRAGMA journal_mode = WAL;
 			PRAGMA synchronous = NORMAL;
@@ -326,13 +329,10 @@ export const TelemetryStoreLive = Layer.sync(
 			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 		`)
 
-		let lastCleanupAt = 0
 		const maxDbSizeBytes = config.otel.maxDbSizeMb * 1024 * 1024
 
 		const cleanupExpired = Effect.fn("leto/TelemetryStore.cleanupExpired")(function* () {
 			const now = yield* Clock.currentTimeMillis
-			if (now - lastCleanupAt < 60_000) return
-			lastCleanupAt = now
 
 			yield* Effect.sync(() => {
 				// Time-based retention
@@ -355,8 +355,11 @@ export const TelemetryStoreLive = Layer.sync(
 			})
 		})
 
+		// Run cleanup every 60 seconds in the background, tied to the layer's scope
+		yield* Effect.forkScoped(Effect.repeat(cleanupExpired(), Schedule.spaced("60 seconds")))
+
 		const ingestTraces = Effect.fn("leto/TelemetryStore.ingestTraces")(function* (payload: OtlpTraceExportRequest) {
-			yield* cleanupExpired()
+
 
 			return yield* Effect.sync(() => {
 				let insertedSpans = 0
@@ -405,7 +408,7 @@ export const TelemetryStoreLive = Layer.sync(
 		})
 
 		const ingestLogs = Effect.fn("leto/TelemetryStore.ingestLogs")(function* (payload: OtlpLogExportRequest) {
-			yield* cleanupExpired()
+
 
 			return yield* Effect.sync(() => {
 				let insertedLogs = 0
@@ -443,7 +446,7 @@ export const TelemetryStoreLive = Layer.sync(
 		})
 
 		const listServices = Effect.fn("leto/TelemetryStore.listServices")(function* () {
-			yield* cleanupExpired()
+
 			const cutoff = (yield* Clock.currentTimeMillis) - config.otel.traceLookbackMinutes * 60 * 1000
 			return yield* Effect.sync(() => {
 				const rows = db.query(`
@@ -457,7 +460,7 @@ export const TelemetryStoreLive = Layer.sync(
 		})()
 
 		const listRecentTraces = Effect.fn("leto/TelemetryStore.listRecentTraces")(function* (serviceName: string | null, options?: { readonly lookbackMinutes?: number; readonly limit?: number }) {
-			yield* cleanupExpired()
+
 			const cutoff = (yield* Clock.currentTimeMillis) - (options?.lookbackMinutes ?? config.otel.traceLookbackMinutes) * 60 * 1000
 			const limit = options?.limit ?? config.otel.traceFetchLimit
 
@@ -523,7 +526,7 @@ export const TelemetryStoreLive = Layer.sync(
 		})
 
 		const searchTraces = Effect.fn("leto/TelemetryStore.searchTraces")(function* (input: TraceSearch) {
-			yield* cleanupExpired()
+
 			const cutoff = (yield* Clock.currentTimeMillis) - (input.lookbackMinutes ?? config.otel.traceLookbackMinutes) * 60 * 1000
 			const limit = input.limit ?? config.otel.traceFetchLimit
 			const candidateLimit = Object.keys(input.attributeFilters ?? {}).length > 0 ? Math.max(limit * 20, 500) : Math.max(limit * 10, 200)
@@ -584,7 +587,7 @@ export const TelemetryStoreLive = Layer.sync(
 		})
 
 		const searchLogs = Effect.fn("leto/TelemetryStore.searchLogs")(function* (input: LogSearch) {
-			yield* cleanupExpired()
+
 			return yield* Effect.sync(() => {
 				const clauses: string[] = []
 				const params: Array<string | number> = []
@@ -706,7 +709,7 @@ export const TelemetryStoreLive = Layer.sync(
 		})
 
 		const listFacets = Effect.fn("leto/TelemetryStore.listFacets")(function* (input: FacetSearch) {
-			yield* cleanupExpired()
+
 			const cutoff = (yield* Clock.currentTimeMillis) - (input.lookbackMinutes ?? config.otel.traceLookbackMinutes) * 60 * 1000
 			const limit = input.limit ?? 20
 
@@ -816,5 +819,5 @@ export const TelemetryStoreLive = Layer.sync(
 			listRecentLogs,
 			listTraceLogs,
 		})
-	},
+	}),
 )
