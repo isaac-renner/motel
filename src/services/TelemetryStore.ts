@@ -327,15 +327,31 @@ export const TelemetryStoreLive = Layer.sync(
 		`)
 
 		let lastCleanupAt = 0
+		const maxDbSizeBytes = config.otel.maxDbSizeMb * 1024 * 1024
 
 		const cleanupExpired = Effect.fn("leto/TelemetryStore.cleanupExpired")(function* () {
 			const now = yield* Clock.currentTimeMillis
 			if (now - lastCleanupAt < 60_000) return
 			lastCleanupAt = now
-			const cutoff = now - config.otel.retentionHours * 60 * 60 * 1000
+
 			yield* Effect.sync(() => {
+				// Time-based retention
+				const cutoff = now - config.otel.retentionHours * 60 * 60 * 1000
 				db.query(`DELETE FROM spans WHERE start_time_ms < ?`).run(cutoff)
 				db.query(`DELETE FROM logs WHERE timestamp_ms < ?`).run(cutoff)
+
+				// Size-based retention: if DB exceeds max, delete oldest 20% of rows
+				const pageCount = (db.query(`PRAGMA page_count`).get() as { page_count: number }).page_count
+				const pageSize = (db.query(`PRAGMA page_size`).get() as { page_size: number }).page_size
+				const dbSize = pageCount * pageSize
+				if (dbSize > maxDbSizeBytes) {
+					const spanCount = (db.query(`SELECT COUNT(*) AS c FROM spans`).get() as { c: number }).c
+					const logCount = (db.query(`SELECT COUNT(*) AS c FROM logs`).get() as { c: number }).c
+					const spanCutCount = Math.max(1, Math.floor(spanCount * 0.2))
+					const logCutCount = Math.max(1, Math.floor(logCount * 0.2))
+					db.query(`DELETE FROM spans WHERE rowid IN (SELECT rowid FROM spans ORDER BY start_time_ms ASC LIMIT ?)`).run(spanCutCount)
+					db.query(`DELETE FROM logs WHERE rowid IN (SELECT rowid FROM logs ORDER BY timestamp_ms ASC LIMIT ?)`).run(logCutCount)
+				}
 			})
 		})
 

@@ -33,6 +33,7 @@ export const config = {
 		traceLookbackMinutes: parsePositiveInt(process.env.LETO_OTEL_TRACE_LOOKBACK_MINUTES, 90),
 		traceFetchLimit: parsePositiveInt(process.env.LETO_OTEL_TRACE_LIMIT, 40),
 		logFetchLimit: parsePositiveInt(process.env.LETO_OTEL_LOG_LIMIT, 80),
-		retentionHours: parsePositiveInt(process.env.LETO_OTEL_RETENTION_HOURS, 12),
+		retentionHours: parsePositiveInt(process.env.LETO_OTEL_RETENTION_HOURS, 168),
+		maxDbSizeMb: parsePositiveInt(process.env.LETO_OTEL_MAX_DB_SIZE_MB, 256),
 	},
 } as const
