@@ -11,6 +11,7 @@ import { attributeFiltersFromEntries, attributeContainsFiltersFromEntries, ATTRI
 import { MOTEL_SERVICE_ID, MOTEL_VERSION, writeRegistryEntry } from "./registry.js"
 import { TelemetryStore, TelemetryStoreLive } from "./services/TelemetryStore.js"
 import type { LogItem, TraceItem, TraceSummaryItem } from "./domain.js"
+import { lifecycleLabel } from "./ui/format.js"
 
 const TRACE_DEFAULT_LIMIT = 20
 const TRACE_MAX_LIMIT = 100
@@ -216,6 +217,7 @@ const renderTracePage = (trace: TraceItem, logs: readonly LogItem[]) => {
 			return `<tr>
 <td style="padding-left:${indent}px">${escapeHtml(span.operationName)}</td>
 <td>${escapeHtml(span.serviceName)}</td>
+<td>${lifecycleLabel(span)}</td>
 <td>${escapeHtml(span.status)}</td>
 <td>${span.durationMs.toFixed(2)}ms</td>
 <td>${count}</td>
@@ -252,11 +254,11 @@ pre { white-space:pre-wrap; margin:0; color:#ede7da; }
 </head>
 <body>
 <h1>${escapeHtml(trace.rootOperationName)}</h1>
-<p class="muted">${escapeHtml(trace.serviceName)} · ${trace.durationMs.toFixed(2)}ms · ${trace.spanCount} spans · ${logs.length} logs</p>
+<p class="muted">${escapeHtml(trace.serviceName)} · ${lifecycleLabel(trace)} · ${trace.durationMs.toFixed(2)}ms · ${trace.spanCount} spans · ${logs.length} logs</p>
 <p class="muted">${escapeHtml(trace.traceId)}</p>
 <h2>Spans</h2>
 <table>
-<thead><tr><th>Operation</th><th>Service</th><th>Status</th><th>Duration</th><th>Logs</th></tr></thead>
+<thead><tr><th>Operation</th><th>Service</th><th>State</th><th>Status</th><th>Duration</th><th>Logs</th></tr></thead>
 <tbody>${spansHtml}</tbody>
 </table>
 <h2>Logs</h2>

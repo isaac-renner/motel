@@ -1,5 +1,6 @@
+import { useRef } from "react"
 import type { LogItem, TraceItem, TraceSpanItem } from "../domain.ts"
-import { formatDuration, truncateText } from "./format.ts"
+import { formatDuration, lifecycleLabel, truncateText } from "./format.ts"
 import { BlankRow, TextLine } from "./primitives.tsx"
 import { colors, waterfallColors } from "./theme.ts"
 
@@ -133,6 +134,7 @@ export const spanPreviewEntries = (span: TraceSpanItem, logs: readonly LogItem[]
 }
 
 const WaterfallRow = ({
+	id,
 	span,
 	logCount,
 	trace,
@@ -144,6 +146,7 @@ const WaterfallRow = ({
 	hasChildSpans,
 	onSelect,
 }: {
+	id: string
 	span: TraceSpanItem
 	logCount: number
 	trace: TraceItem
@@ -157,7 +160,7 @@ const WaterfallRow = ({
 }) => {
 	const prefix = buildTreePrefix(spans, index)
 	const indicator = span.status === "error" ? "!" : hasChildSpans ? (collapsed ? "\u25b8" : "\u25be") : "\u00b7"
-	const opName = span.operationName
+	const opName = span.isRunning ? `${span.operationName} [${lifecycleLabel(span)}]` : span.operationName
 	const duration = formatDuration(span.durationMs)
 	const logText = logCount > 0 ? `${logCount}lg` : ""
 
@@ -174,10 +177,10 @@ const WaterfallRow = ({
 	const bg = selected ? colors.selectedBg : undefined
 	const treeColor = selected ? colors.separator : colors.treeLine
 	const indicatorColor = isError ? colors.error : selected ? colors.passing : colors.muted
-	const opColor = selected ? colors.selectedText : colors.text
+	const opColor = selected ? colors.selectedText : span.isRunning ? colors.warning : colors.text
 
 	return (
-		<box height={1} onMouseDown={onSelect}>
+		<box id={id} height={1} onMouseDown={onSelect}>
 			<TextLine bg={bg}>
 				{prefix ? <span fg={treeColor}>{prefix}</span> : null}
 				<span fg={indicatorColor}>{indicator}</span>
@@ -267,9 +270,6 @@ export const WaterfallTimeline = ({
 	onSelectSpan: (index: number) => void
 }) => {
 	const selectedSpan = selectedSpanIndex !== null ? filteredSpans[selectedSpanIndex] ?? null : null
-	const previewTagCount = selectedSpan ? spanPreviewEntries(selectedSpan, selectedSpanLogs, 99).length : 0
-	const previewLines = selectedSpan ? Math.min(Math.max(previewTagCount, 1), Math.max(2, Math.floor(bodyLines * 0.4))) : 0
-	const waterfallLines = bodyLines - 1 - previewLines
 
 	const { labelMaxWidth, durationWidth, barWidth } = getWaterfallLayout(contentWidth, trace.durationMs)
 	const midDuration = formatDuration(trace.durationMs / 2)
@@ -279,19 +279,36 @@ export const WaterfallTimeline = ({
 	const midPoint = Math.floor(barWidth / 2)
 	const rulerBar = `${"0".padEnd(midPoint)}${midDuration.padEnd(barWidth - midPoint)} ${endDuration.padStart(durationWidth)}`
 
-	const spanWindowSize = Math.max(1, waterfallLines)
-	const windowStart = selectedSpanIndex === null
-		? 0
-		: Math.max(0, Math.min(selectedSpanIndex - Math.floor(spanWindowSize / 2), filteredSpans.length - spanWindowSize))
-	const windowSpans = filteredSpans.slice(windowStart, windowStart + spanWindowSize)
-	const blankCount = Math.max(0, spanWindowSize - windowSpans.length)
-
-	const remainingBlanks = Math.max(0, blankCount - (selectedSpan ? 0 : previewLines))
-
 	const spanIndexById = new Map<string, number>()
 	for (let i = 0; i < trace.spans.length; i++) {
 		spanIndexById.set(trace.spans[i].spanId, i)
 	}
+
+	// Virtual windowing: only render visible rows, shift window only when
+	// the selection would go out of view (no jerkiness).
+	const viewportSize = Math.max(1, bodyLines - 1)
+	const scrollOffsetRef = useRef(0)
+	const lastTraceIdRef = useRef<string | null>(null)
+
+	// Reset scroll offset when the trace changes
+	if (trace.traceId !== lastTraceIdRef.current) {
+		scrollOffsetRef.current = 0
+		lastTraceIdRef.current = trace.traceId
+	}
+
+	// Only shift the window when the selection would be outside it
+	if (selectedSpanIndex !== null) {
+		if (selectedSpanIndex < scrollOffsetRef.current) {
+			scrollOffsetRef.current = selectedSpanIndex
+		} else if (selectedSpanIndex >= scrollOffsetRef.current + viewportSize) {
+			scrollOffsetRef.current = selectedSpanIndex - viewportSize + 1
+		}
+	}
+	scrollOffsetRef.current = Math.max(0, Math.min(scrollOffsetRef.current, Math.max(0, filteredSpans.length - viewportSize)))
+
+	const windowStart = scrollOffsetRef.current
+	const windowSpans = filteredSpans.slice(windowStart, windowStart + viewportSize)
+	const blankCount = Math.max(0, viewportSize - windowSpans.length)
 
 	return (
 		<box flexDirection="column">
@@ -302,24 +319,24 @@ export const WaterfallTimeline = ({
 			{windowSpans.map((span, index) => {
 				const actualIndex = windowStart + index
 				const fullIndex = spanIndexById.get(span.spanId) ?? -1
-
 				return (
-				<WaterfallRow
-					key={`${trace.traceId}-${span.spanId}`}
-					span={span}
-					logCount={spanLogCounts.get(span.spanId) ?? 0}
-					trace={trace}
-					index={fullIndex}
-					spans={trace.spans}
-					contentWidth={contentWidth}
-					selected={selectedSpanIndex === actualIndex}
-					collapsed={collapsedSpanIds.has(span.spanId)}
-					hasChildSpans={fullIndex >= 0 && findFirstChildIndex(trace.spans, fullIndex) !== null}
-					onSelect={() => onSelectSpan(actualIndex)}
-				/>
+					<WaterfallRow
+						id={`waterfall-span-${actualIndex}`}
+						key={`${trace.traceId}-${span.spanId}`}
+						span={span}
+						logCount={spanLogCounts.get(span.spanId) ?? 0}
+						trace={trace}
+						index={fullIndex}
+						spans={trace.spans}
+						contentWidth={contentWidth}
+						selected={selectedSpanIndex === actualIndex}
+						collapsed={collapsedSpanIds.has(span.spanId)}
+						hasChildSpans={fullIndex >= 0 && findFirstChildIndex(trace.spans, fullIndex) !== null}
+						onSelect={() => onSelectSpan(actualIndex)}
+					/>
 				)
 			})}
-			{Array.from({ length: remainingBlanks }, (_, i) => (
+			{Array.from({ length: blankCount }, (_, i) => (
 				<BlankRow key={`blank-${i}`} />
 			))}
 		</box>

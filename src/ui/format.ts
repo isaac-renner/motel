@@ -26,6 +26,8 @@ export const formatDuration = (durationMs: number) => {
 	return `${durationMs.toFixed(2)}ms`
 }
 
+export const lifecycleLabel = (value: { readonly isRunning: boolean }) => (value.isRunning ? "open" : "closed")
+
 export const relativeTime = (date: Date) => {
 	const seconds = Math.max(0, Math.floor((Date.now() - date.getTime()) / 1000))
 	if (seconds < 60) return `${seconds}s`

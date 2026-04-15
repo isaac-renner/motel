@@ -47,19 +47,13 @@ export const AlignedHeaderLine = ({ left, right, width, rightFg = colors.muted }
 	)
 }
 
-export const Divider = ({ width, junctionAt, junctionChar }: { width: number; junctionAt?: number; junctionChar?: string }) => {
-	if (junctionAt === undefined || junctionChar === undefined || junctionAt < 0 || junctionAt >= width) {
-		return <PlainLine text={"\u2500".repeat(Math.max(1, width))} fg={colors.separator} />
-	}
+export const Divider = ({ width }: { width: number }) => (
+	<PlainLine text={"\u2500".repeat(Math.max(1, width))} fg={colors.separator} />
+)
 
-	return <PlainLine text={`${"\u2500".repeat(junctionAt)}${junctionChar}${"\u2500".repeat(Math.max(0, width - junctionAt - 1))}`} fg={colors.separator} />
-}
-
-export const SeparatorColumn = ({ height, junctionRow }: { height: number; junctionRow?: number }) => (
-	<box width={1} height={height} flexDirection="column">
-		{Array.from({ length: height }, (_, index) => (
-			<PlainLine key={index} text={junctionRow === index ? "\u251c" : "\u2502"} fg={colors.separator} />
-		))}
+export const SeparatorColumn = ({ height }: { height: number }) => (
+	<box width={1} height={height} overflow="hidden">
+		<text fg={colors.separator}>{"\u2502\n".repeat(Math.max(1, height)).slice(0, -1)}</text>
 	</box>
 )
 

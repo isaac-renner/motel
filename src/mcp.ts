@@ -2,6 +2,7 @@
 import { BunRuntime, BunStdio } from "@effect/platform-bun"
 import { Effect, Layer, Logger, Schema } from "effect"
 import { McpServer, Tool, Toolkit } from "effect/unstable/ai"
+import { TraceSpanStatus } from "./domain.js"
 import { MotelClient, MotelClientLive } from "./motelClient.js"
 import { Locator, LocatorLive } from "./locator.js"
 
@@ -35,7 +36,7 @@ const ServiceParam = Schema.optional(
 )
 
 const Status = Schema.optional(
-	Schema.Literals(["ok", "error"]).annotate({
+	TraceSpanStatus.annotate({
 		description:
 			"Filter by trace health. 'error' = at least one span errored. 'ok' = no errors.",
 	}),

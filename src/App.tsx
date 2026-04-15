@@ -1,7 +1,7 @@
 import type { ScrollBoxRenderable } from "@opentui/core"
 import { useAtom } from "@effect/atom-react"
 import { useTerminalDimensions } from "@opentui/react"
-import { useEffect, useRef } from "react"
+import { useEffect, useLayoutEffect, useRef } from "react"
 import { config } from "./config.js"
 import { fitCell, formatShortDate, formatTimestamp, traceRowId } from "./ui/format.ts"
 import { AlignedHeaderLine, BlankRow, Divider, FilterBar, FooterHints, PlainLine, SeparatorColumn, TextLine } from "./ui/primitives.tsx"
@@ -34,7 +34,7 @@ import {
 	traceDetailStateAtom,
 	traceStateAtom,
 } from "./ui/state.ts"
-import { colors, DETAIL_DIVIDER_ROW, SEPARATOR } from "./ui/theme.ts"
+import { colors, SEPARATOR } from "./ui/theme.ts"
 import { TraceDetailsPane } from "./ui/TraceDetailsPane.tsx"
 import { getVisibleSpans } from "./ui/Waterfall.tsx"
 import { TraceList } from "./ui/TraceList.tsx"
@@ -67,22 +67,22 @@ export const App = () => {
 	const sectionPadding = 1
 	const traceListHeaderHeight = 1
 	const footerNotice = notice ? fitCell(notice, Math.max(24, Math.max(60, width ?? 100) - 2)) : null
-	const footerHeight = footerNotice ? 1 : showHelp ? 2 : 0
+	const footerHeight = footerNotice ? 1 : 2
 	const footerFrameHeight = footerHeight > 0 ? 1 + footerHeight : 0
 	const frameHeight = 1 + 1 + footerFrameHeight
 	const availableContentHeight = Math.max(10, (height ?? 24) - frameHeight)
 	const leftPaneWidth = isWideLayout ? Math.max(44, Math.floor((contentWidth - splitGap) * 0.38)) : contentWidth
 	const rightPaneWidth = isWideLayout ? Math.max(28, contentWidth - leftPaneWidth - splitGap) : contentWidth
-	const dividerJunctionAt = Math.max(1, leftPaneWidth)
+	
 	const leftContentWidth = isWideLayout ? Math.max(24, leftPaneWidth - 3) : Math.max(24, contentWidth - sectionPadding * 2)
 	const rightContentWidth = isWideLayout ? Math.max(24, rightPaneWidth - sectionPadding * 2) : Math.max(24, contentWidth - sectionPadding * 2)
 	const headerFooterWidth = Math.max(24, contentWidth - 2)
 	const wideBodyHeight = availableContentHeight
-	const wideBodyLines = Math.max(8, Math.min(16, wideBodyHeight - 7))
+	const wideBodyLines = Math.max(8, wideBodyHeight - 5)
 	const narrowSplitHeight = Math.max(10, availableContentHeight - 1)
 	const narrowListHeight = Math.max(4, Math.min(10, Math.floor(narrowSplitHeight * 0.4), narrowSplitHeight - 9))
 	const narrowDetailHeight = narrowSplitHeight - narrowListHeight
-	const narrowBodyLines = Math.max(2, narrowDetailHeight - 7)
+	const narrowBodyLines = Math.max(2, narrowDetailHeight - 5)
 	const wideTraceListBodyHeight = Math.max(1, wideBodyHeight - traceListHeaderHeight)
 	const narrowTraceListBodyHeight = Math.max(1, narrowListHeight - traceListHeaderHeight)
 	const traceViewportRows = isWideLayout ? wideTraceListBodyHeight : narrowTraceListBodyHeight
@@ -260,14 +260,10 @@ export const App = () => {
 	}, [selectedTrace, selectedSpanIndex, collapsedSpanIds, setSelectedSpanIndex, setDetailView])
 
 	// Scroll selected trace into view
-	useEffect(() => {
+	useLayoutEffect(() => {
 		const traceId = selectedTrace?.traceId
 		if (!traceId) return
-		// Defer to next tick so the scrollbox has rendered the updated children
-		const id = setTimeout(() => {
-			traceListScrollRef.current?.scrollChildIntoView(traceRowId(traceId))
-		}, 0)
-		return () => clearTimeout(id)
+		traceListScrollRef.current?.scrollChildIntoView(traceRowId(traceId))
 	}, [selectedTraceIndex, selectedTrace?.traceId, filterText])
 
 	// Load trace logs
@@ -454,7 +450,7 @@ export const App = () => {
 			<box paddingLeft={1} paddingRight={1} flexDirection="column">
 				<PlainLine text={headerLine} fg={colors.muted} bold />
 			</box>
-			<Divider width={contentWidth} junctionAt={detailView === "service-logs" ? undefined : isWideLayout ? dividerJunctionAt : undefined} junctionChar={detailView === "service-logs" ? undefined : isWideLayout ? "\u252c" : undefined} />
+			<Divider width={contentWidth} />
 			{detailView === "service-logs" ? (
 				<box flexGrow={1} flexDirection="column" paddingLeft={1} paddingRight={1}>
 					<AlignedHeaderLine
@@ -487,11 +483,9 @@ export const App = () => {
 							<TraceList showHeader={false} {...traceListProps} />
 						</scrollbox>
 					</box>
-					<SeparatorColumn height={wideBodyHeight} junctionRow={DETAIL_DIVIDER_ROW} />
+					<SeparatorColumn height={wideBodyHeight} />
 					<box width={rightPaneWidth} height={wideBodyHeight} flexDirection="column">
-						<scrollbox height={wideBodyHeight} flexGrow={0}>
-							<TraceDetailsPane trace={selectedTrace} traceLogsState={logState} contentWidth={rightContentWidth} bodyLines={wideBodyLines} paneWidth={rightPaneWidth} selectedSpanIndex={selectedSpanIndex} collapsedSpanIds={collapsedSpanIds} detailView={detailView} focused={spanNavActive} onSelectSpan={selectSpan} />
-						</scrollbox>
+						<TraceDetailsPane trace={selectedTrace} traceLogsState={logState} contentWidth={rightContentWidth} bodyLines={wideBodyLines} paneWidth={rightPaneWidth} selectedSpanIndex={selectedSpanIndex} collapsedSpanIds={collapsedSpanIds} detailView={detailView} focused={spanNavActive} onSelectSpan={selectSpan} />
 					</box>
 				</box>
 			) : (
@@ -509,7 +503,7 @@ export const App = () => {
 			)}
 			{footerHeight > 0 ? (
 				<>
-					<Divider width={contentWidth} junctionAt={detailView === "service-logs" ? undefined : isWideLayout ? dividerJunctionAt : undefined} junctionChar={detailView === "service-logs" ? undefined : isWideLayout ? "\u2534" : undefined} />
+					<Divider width={contentWidth} />
 					<box paddingLeft={1} paddingRight={1} flexDirection="column" height={footerHeight}>
 						{visibleFooterNotice ? (
 							<PlainLine text={visibleFooterNotice} fg={colors.count} />

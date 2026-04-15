@@ -65,7 +65,7 @@
 - Health: `http://127.0.0.1:27686/api/health`
 
 ## Env Vars
-- `MOTEL_OTEL_ENABLED`: defaults to `true`
+- `MOTEL_OTEL_ENABLED`: defaults to `false` (set to `true` to emit self-traces for debugging motel itself)
 - `MOTEL_OTEL_SERVICE_NAME`: defaults to `motel-otel-tui`
 - `MOTEL_OTEL_BASE_URL`: defaults to `http://127.0.0.1:27686`
 - `MOTEL_OTEL_HOST`: defaults to `127.0.0.1`

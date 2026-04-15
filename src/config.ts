@@ -21,7 +21,7 @@ const serverPort = parsePositiveInt(process.env.MOTEL_OTEL_PORT, Number.parseInt
 
 export const config = {
 	otel: {
-		enabled: parseBoolean(process.env.MOTEL_OTEL_ENABLED, true),
+		enabled: parseBoolean(process.env.MOTEL_OTEL_ENABLED, false),
 		serviceName: process.env.MOTEL_OTEL_SERVICE_NAME?.trim() || "motel-otel-tui",
 		baseUrl,
 		host: process.env.MOTEL_OTEL_HOST?.trim() || parsedBaseUrl.hostname,

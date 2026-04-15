@@ -1,6 +1,10 @@
 import { Schema } from "effect"
 import { HttpApi, HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/unstable/httpapi"
-import { AiCallSummary, AiCallDetail, FacetItem, StatsItem } from "./domain.js"
+import {
+	AiCallSummary, AiCallDetail,
+	FacetItem, StatsItem, TraceSpanStatus,
+	TraceItem, TraceSummaryItem, SpanItem, LogItem,
+} from "./domain.js"
 
 const ErrorResponse = Schema.Struct({ error: Schema.String })
 const Meta = Schema.Struct({
@@ -10,76 +14,6 @@ const Meta = Schema.Struct({
 	truncated: Schema.Boolean,
 	nextCursor: Schema.NullOr(Schema.String),
 }).annotate({ identifier: "ListMeta" })
-
-const TraceSpanEvent = Schema.Struct({
-	name: Schema.String.pipe(Schema.annotateKey({ description: "Event name" })),
-	timestamp: Schema.String.pipe(Schema.annotateKey({ description: "ISO 8601 timestamp" })),
-	attributes: Schema.Unknown.pipe(Schema.annotateKey({ description: "Key-value attributes attached to the event" })),
-})
-
-const TraceSpan = Schema.Struct({
-	spanId: Schema.String,
-	parentSpanId: Schema.NullOr(Schema.String),
-	serviceName: Schema.String,
-	scopeName: Schema.NullOr(Schema.String).pipe(Schema.annotateKey({ description: "Instrumentation scope (e.g. module or library name)" })),
-	kind: Schema.NullOr(Schema.String).pipe(Schema.annotateKey({ description: "Span kind: client, server, producer, consumer, or internal" })),
-	operationName: Schema.String.pipe(Schema.annotateKey({ description: "The operation this span represents (e.g. HTTP handler, DB query)" })),
-	startTime: Schema.String.pipe(Schema.annotateKey({ description: "ISO 8601 timestamp" })),
-	isRunning: Schema.Boolean.pipe(Schema.annotateKey({ description: "True when the span has not reported an end timestamp yet" })),
-	durationMs: Schema.Number.pipe(Schema.annotateKey({ description: "Wall-clock duration in milliseconds" })),
-	status: Schema.Literals(["ok", "error"]).pipe(Schema.annotateKey({ description: "ok or error" })),
-	depth: Schema.Number.pipe(Schema.annotateKey({ description: "Nesting depth in the span tree (root = 0)" })),
-	tags: Schema.Unknown.pipe(Schema.annotateKey({ description: "Span attributes as key-value pairs" })),
-	warnings: Schema.Array(Schema.String).pipe(Schema.annotateKey({ description: "Structural warnings (e.g. missing parent span)" })),
-	events: Schema.Array(TraceSpanEvent),
-}).annotate({ identifier: "TraceSpan" })
-
-const Trace = Schema.Struct({
-	traceId: Schema.String,
-	serviceName: Schema.String.pipe(Schema.annotateKey({ description: "Service that owns the root span" })),
-	rootOperationName: Schema.String.pipe(Schema.annotateKey({ description: "Operation name of the root span" })),
-	startedAt: Schema.String.pipe(Schema.annotateKey({ description: "ISO 8601 timestamp of the earliest span" })),
-	isRunning: Schema.Boolean.pipe(Schema.annotateKey({ description: "True when any span in the trace is still open" })),
-	durationMs: Schema.Number.pipe(Schema.annotateKey({ description: "End-to-end trace duration in milliseconds" })),
-	spanCount: Schema.Number,
-	errorCount: Schema.Number.pipe(Schema.annotateKey({ description: "Number of spans with status=error" })),
-	warnings: Schema.Array(Schema.String),
-	spans: Schema.Array(TraceSpan).pipe(Schema.annotateKey({ description: "Spans ordered by parent-child hierarchy, depth-first" })),
-}).annotate({ identifier: "Trace" })
-
-const TraceSummary = Schema.Struct({
-	traceId: Schema.String,
-	serviceName: Schema.String,
-	rootOperationName: Schema.String,
-	startedAt: Schema.String,
-	isRunning: Schema.Boolean,
-	durationMs: Schema.Number,
-	spanCount: Schema.Number,
-	errorCount: Schema.Number,
-	warnings: Schema.Array(Schema.String),
-}).annotate({ identifier: "TraceSummary" })
-
-const Span = Schema.Struct({
-	traceId: Schema.String,
-	rootOperationName: Schema.String.pipe(Schema.annotateKey({ description: "Operation name of the trace's root span, for context" })),
-	parentOperationName: Schema.NullOr(Schema.String).pipe(Schema.annotateKey({ description: "Parent span operation name, if present" })),
-	span: TraceSpan,
-}).annotate({ identifier: "SpanWithContext" })
-
-const Log = Schema.Struct({
-	id: Schema.String,
-	timestamp: Schema.String.pipe(Schema.annotateKey({ description: "ISO 8601 timestamp" })),
-	serviceName: Schema.String,
-	severityText: Schema.String.pipe(Schema.annotateKey({ description: "Log level: TRACE, DEBUG, INFO, WARN, ERROR, FATAL" })),
-	body: Schema.String.pipe(Schema.annotateKey({ description: "Log message body" })),
-	traceId: Schema.NullOr(Schema.String).pipe(Schema.annotateKey({ description: "Associated trace ID, if the log was emitted inside a span" })),
-	spanId: Schema.NullOr(Schema.String).pipe(Schema.annotateKey({ description: "Associated span ID, if the log was emitted inside a span" })),
-	scopeName: Schema.NullOr(Schema.String),
-	attributes: Schema.Unknown.pipe(Schema.annotateKey({ description: "Merged resource + log attributes as key-value pairs" })),
-}).annotate({ identifier: "Log" })
-
-const Facet = FacetItem
-const Stat = StatsItem
 
 const ServiceList = Schema.Struct({ data: Schema.Array(Schema.String) })
 const Health = Schema.Struct({
@@ -103,14 +37,14 @@ const DocIndex = Schema.Struct({
 }).annotate({ identifier: "DocIndex" })
 const PlainText = Schema.String.pipe(HttpApiSchema.asText())
 const HtmlText = Schema.String.pipe(HttpApiSchema.asText({ contentType: "text/html" }))
-const TraceSummaryList = Schema.Struct({ data: Schema.Array(TraceSummary), meta: Meta })
-const SpanResponse = Schema.Struct({ data: Span })
-const SpanList = Schema.Struct({ data: Schema.Array(Span) })
-const PaginatedSpanList = Schema.Struct({ data: Schema.Array(Span), meta: Meta })
-const TraceResponse = Schema.Struct({ data: Trace })
-const LogList = Schema.Struct({ data: Schema.Array(Log), meta: Meta })
-const FacetList = Schema.Struct({ data: Schema.Array(Facet) })
-const StatList = Schema.Struct({ data: Schema.Array(Stat) })
+const TraceSummaryList = Schema.Struct({ data: Schema.Array(TraceSummaryItem), meta: Meta })
+const SpanResponse = Schema.Struct({ data: SpanItem })
+const SpanList = Schema.Struct({ data: Schema.Array(SpanItem) })
+const PaginatedSpanList = Schema.Struct({ data: Schema.Array(SpanItem), meta: Meta })
+const TraceResponse = Schema.Struct({ data: TraceItem })
+const LogList = Schema.Struct({ data: Schema.Array(LogItem), meta: Meta })
+const FacetList = Schema.Struct({ data: Schema.Array(FacetItem) })
+const StatList = Schema.Struct({ data: Schema.Array(StatsItem) })
 
 const AiCallList = Schema.Struct({ data: Schema.Array(AiCallSummary), meta: Meta })
 const AiCallDetailResponse = Schema.Struct({ data: AiCallDetail })
@@ -181,7 +115,7 @@ export const MotelHttpApi = HttpApi.make("MotelTelemetry")
 						operation: Schema.optionalKey(Schema.String).pipe(
 							Schema.annotateKey({ description: "Substring match against span operation names (case-insensitive)" }),
 						),
-						status: Schema.optionalKey(Schema.Literals(["ok", "error"])).pipe(
+						status: Schema.optionalKey(TraceSpanStatus).pipe(
 							Schema.annotateKey({ description: "Filter by trace health: 'error' = at least one span errored, 'ok' = no errors" }),
 						),
 						minDurationMs: Schema.optionalKey(Schema.Number).pipe(
@@ -202,7 +136,7 @@ export const MotelHttpApi = HttpApi.make("MotelTelemetry")
 						agg: Schema.Literals(["count", "avg_duration", "p95_duration", "error_rate"]),
 						service: ServiceParam,
 						operation: Schema.optionalKey(Schema.String),
-						status: Schema.optionalKey(Schema.Literals(["ok", "error"])),
+						status: Schema.optionalKey(TraceSpanStatus),
 						minDurationMs: Schema.optionalKey(Schema.Number),
 						lookback: LookbackParam,
 						limit: LimitParam,
@@ -288,7 +222,7 @@ export const MotelHttpApi = HttpApi.make("MotelTelemetry")
 						),
 						operation: Schema.optionalKey(Schema.String),
 						parentOperation: Schema.optionalKey(Schema.String),
-						status: Schema.optionalKey(Schema.Literals(["ok", "error"])),
+						status: Schema.optionalKey(TraceSpanStatus),
 						lookback: LookbackParam,
 						limit: LimitParam,
 					},
@@ -398,7 +332,7 @@ export const MotelHttpApi = HttpApi.make("MotelTelemetry")
 						provider: Schema.optionalKey(Schema.String).pipe(Schema.annotateKey({ description: "Filter by ai.model.provider (e.g. openai.responses)" })),
 						model: Schema.optionalKey(Schema.String).pipe(Schema.annotateKey({ description: "Filter by ai.model.id (e.g. gpt-5.4)" })),
 						operation: Schema.optionalKey(Schema.String).pipe(Schema.annotateKey({ description: "Filter by AI operation: streamText, generateText, streamObject, etc." })),
-						status: Schema.optionalKey(Schema.Literals(["ok", "error"])),
+						status: Schema.optionalKey(TraceSpanStatus),
 						minDurationMs: Schema.optionalKey(Schema.Number),
 						text: Schema.optionalKey(Schema.String).pipe(Schema.annotateKey({ description: "Case-insensitive substring search across prompt, response, and tool content" })),
 						lookback: LookbackParam,
@@ -434,7 +368,7 @@ export const MotelHttpApi = HttpApi.make("MotelTelemetry")
 						provider: Schema.optionalKey(Schema.String),
 						model: Schema.optionalKey(Schema.String),
 						operation: Schema.optionalKey(Schema.String),
-						status: Schema.optionalKey(Schema.Literals(["ok", "error"])),
+						status: Schema.optionalKey(TraceSpanStatus),
 						minDurationMs: Schema.optionalKey(Schema.Number),
 						lookback: LookbackParam,
 						limit: LimitParam,

@@ -1,5 +1,5 @@
 import type { TraceItem } from "../domain.ts"
-import { formatDuration, formatShortDate, formatTimestamp, traceUiUrl } from "./format.ts"
+import { formatDuration, formatShortDate, formatTimestamp, lifecycleLabel, traceUiUrl } from "./format.ts"
 import { AlignedHeaderLine, BlankRow, Divider, PlainLine, TextLine } from "./primitives.tsx"
 import { SpanDetailView } from "./SpanDetail.tsx"
 import { getVisibleSpans, SpanPreview, spanPreviewEntries, WaterfallTimeline } from "./Waterfall.tsx"
@@ -37,26 +37,35 @@ export const TraceDetailsPane = ({
 		if (!log.spanId) continue
 		spanLogCounts.set(log.spanId, (spanLogCounts.get(log.spanId) ?? 0) + 1)
 	}
-	const focusIndicator = focused ? "\u25b8 " : "  "
+	const focusIndicator = focused ? "\u25b8 " : ""
 	const detailHeaderTitle = detailView === "span-detail" && selectedSpan
 		? `${focusIndicator}SPAN DETAIL`
 			: `${focusIndicator}TRACE DETAILS`
 	const detailHeaderRight = detailView === "span-detail" && selectedSpan
-		? `${selectedSpan.status} \u00b7 ${formatDuration(selectedSpan.durationMs)}${selectedSpanLogs.length > 0 ? ` \u00b7 ${selectedSpanLogs.length} logs` : ""}`
+		? `${lifecycleLabel(selectedSpan)} \u00b7 ${selectedSpan.status} \u00b7 ${formatDuration(selectedSpan.durationMs)}${selectedSpanLogs.length > 0 ? ` \u00b7 ${selectedSpanLogs.length} logs` : ""}`
 		: trace
-			? `${trace.errorCount > 0 ? `${trace.errorCount} errors` : "healthy"} \u00b7 ${formatDuration(trace.durationMs)}${traceLogCount > 0 ? ` \u00b7 ${traceLogCount} logs` : ""}`
+			? `${lifecycleLabel(trace)} \u00b7 ${trace.errorCount > 0 ? `${trace.errorCount} errors` : "healthy"} \u00b7 ${formatDuration(trace.durationMs)}${traceLogCount > 0 ? ` \u00b7 ${traceLogCount} logs` : ""}`
 			: "waiting for trace"
 	const detailHeaderColor = detailView === "span-detail" && selectedSpan
-		? selectedSpan.status === "error"
+		? selectedSpan.isRunning
+			? colors.warning
+			: selectedSpan.status === "error"
 			? colors.error
 			: colors.passing
-		: trace && trace.errorCount > 0
+		: trace?.isRunning
+			? colors.warning
+			: trace && trace.errorCount > 0
 			? colors.error
 			: colors.passing
 
+	const previewMaxLines = selectedSpan ? Math.min(spanPreviewEntries(selectedSpan, selectedSpanLogs, 99).length, 8) : 0
+	// Header section: 1 (header) + 3 (info lines) + 1 (divider) = 5 rows
+	const headerRows = 5
+	const waterfallBodyLines = Math.max(4, bodyLines - previewMaxLines - (previewMaxLines > 0 ? 1 : 0))
+
 	return (
-		<box flexDirection="column" height={bodyLines + 7}>
-			<box paddingLeft={1} paddingRight={1}>
+		<box flexDirection="column" height={bodyLines + headerRows}>
+			<box paddingLeft={1}>
 				<AlignedHeaderLine left={detailHeaderTitle} right={detailHeaderRight} width={contentWidth} rightFg={detailHeaderColor} />
 			</box>
 			{trace ? (
@@ -68,23 +77,25 @@ export const TraceDetailsPane = ({
 					) : (
 						<>
 							<box flexDirection="column" paddingLeft={1} paddingRight={1}>
-								<TextLine>
-									<span>{trace.rootOperationName}</span>
-								</TextLine>
 								{(() => {
-									const left = `${trace.serviceName}${SEPARATOR}${trace.spanCount} spans`
 									const dateStr = `${formatShortDate(trace.startedAt)} ${formatTimestamp(trace.startedAt)}`
-									const gap = Math.max(2, contentWidth - left.length - dateStr.length)
+									const opLeft = trace.rootOperationName
+									const opGap = Math.max(2, contentWidth - opLeft.length - dateStr.length)
 									return (
 										<TextLine>
-											<span fg={colors.defaultService}>{trace.serviceName}</span>
-											<span fg={colors.separator}>{SEPARATOR}</span>
-											<span fg={colors.count}>{trace.spanCount} spans</span>
-											<span>{" ".repeat(gap)}</span>
+											<span>{opLeft}</span>
+											<span>{" ".repeat(opGap)}</span>
 											<span fg={colors.muted}>{dateStr}</span>
 										</TextLine>
 									)
 								})()}
+								<TextLine>
+									<span fg={colors.defaultService}>{trace.serviceName}</span>
+									<span fg={colors.separator}>{SEPARATOR}</span>
+									<span fg={colors.count}>{trace.spanCount} spans</span>
+									<span fg={colors.separator}>{SEPARATOR}</span>
+									<span fg={trace.isRunning ? colors.warning : colors.muted}>{lifecycleLabel(trace)}</span>
+								</TextLine>
 								{trace.warnings.length > 0 ? (
 									<PlainLine text={trace.warnings.join(" | ")} fg={colors.error} />
 								) : (
@@ -99,7 +110,7 @@ export const TraceDetailsPane = ({
 									spanLogCounts={spanLogCounts}
 									selectedSpanLogs={selectedSpanLogs}
 									contentWidth={contentWidth}
-									bodyLines={bodyLines}
+									bodyLines={waterfallBodyLines}
 									selectedSpanIndex={selectedSpanIndex}
 									collapsedSpanIds={collapsedSpanIds}
 									onSelectSpan={onSelectSpan}
@@ -109,7 +120,7 @@ export const TraceDetailsPane = ({
 								<>
 								<Divider width={paneWidth} />
 								<box flexDirection="column" paddingLeft={1} paddingRight={1}>
-									<SpanPreview span={selectedSpan} logs={selectedSpanLogs} contentWidth={contentWidth} maxLines={Math.min(spanPreviewEntries(selectedSpan, selectedSpanLogs, 99).length, Math.max(2, Math.floor(bodyLines * 0.4)))} />
+									<SpanPreview span={selectedSpan} logs={selectedSpanLogs} contentWidth={contentWidth} maxLines={previewMaxLines} />
 								</box>
 							</>
 						) : null}
@@ -119,9 +130,6 @@ export const TraceDetailsPane = ({
 			) : (
 				<box flexDirection="column" paddingLeft={1} paddingRight={1}>
 					<PlainLine text="No trace selected. Use j/k in the trace list." fg={colors.muted} />
-					{Array.from({ length: bodyLines + 2 }, (_, index) => (
-						<BlankRow key={index} />
-					))}
 				</box>
 			)}
 		</box>

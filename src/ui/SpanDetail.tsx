@@ -1,6 +1,6 @@
 import { TextAttributes } from "@opentui/core"
 import type { LogItem, TraceSpanItem } from "../domain.ts"
-import { formatDuration, formatTimestamp, logSeverityColor, relevantLogAttributes, truncateText, wrapTextLines } from "./format.ts"
+import { formatDuration, formatTimestamp, lifecycleLabel, logSeverityColor, relevantLogAttributes, truncateText, wrapTextLines } from "./format.ts"
 import { BlankRow, PlainLine, TextLine } from "./primitives.tsx"
 import { colors, SEPARATOR } from "./theme.ts"
 
@@ -35,6 +35,8 @@ export const SpanDetailView = ({
 				<span fg={colors.defaultService}>{span.serviceName}</span>
 				<span fg={colors.separator}>{SEPARATOR}</span>
 				<span fg={colors.count}>{formatDuration(span.durationMs)}</span>
+				<span fg={colors.separator}>{SEPARATOR}</span>
+				<span fg={span.isRunning ? colors.warning : colors.muted}>{lifecycleLabel(span)}</span>
 				<span fg={colors.separator}>{SEPARATOR}</span>
 				<span fg={span.status === "error" ? colors.error : colors.passing}>{span.status}</span>
 			</TextLine>

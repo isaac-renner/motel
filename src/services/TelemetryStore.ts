@@ -579,10 +579,13 @@ export const TelemetryStoreLive = Layer.effect(
 				const deletedLogs = db.query(`DELETE FROM logs WHERE timestamp_ms < ?`).run(cutoff) as { changes?: number }
 				deletedData = (deletedSpans.changes ?? 0) > 0 || (deletedLogs.changes ?? 0) > 0
 
-				// Size-based retention: if DB exceeds max, delete oldest 20% of rows
+				// Size-based retention: if actual data exceeds max, delete oldest 20% of rows.
+				// Use (page_count - freelist_count) to ignore freed-but-not-vacuumed pages;
+				// otherwise a large freelist triggers a deletion death spiral.
 				const pageCount = (db.query(`PRAGMA page_count`).get() as { page_count: number }).page_count
+				const freePages = (db.query(`PRAGMA freelist_count`).get() as { freelist_count: number }).freelist_count
 				const pageSize = (db.query(`PRAGMA page_size`).get() as { page_size: number }).page_size
-				const dbSize = pageCount * pageSize
+				const dbSize = (pageCount - freePages) * pageSize
 				if (dbSize > maxDbSizeBytes) {
 					const spanCount = (db.query(`SELECT COUNT(*) AS c FROM spans`).get() as { c: number }).c
 					const logCount = (db.query(`SELECT COUNT(*) AS c FROM logs`).get() as { c: number }).c

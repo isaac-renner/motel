@@ -1,6 +1,6 @@
 import { config } from "../config.ts"
 import type { TraceSummaryItem } from "../domain.ts"
-import { fitCell, formatDuration, relativeTime, traceIndicator, traceIndicatorColor, traceRowId } from "./format.ts"
+import { fitCell, formatDuration, lifecycleLabel, relativeTime, traceIndicator, traceIndicatorColor, traceRowId } from "./format.ts"
 import { AlignedHeaderLine, PlainLine, TextLine } from "./primitives.tsx"
 import type { LoadStatus } from "./state.ts"
 import { colors } from "./theme.ts"
@@ -26,14 +26,17 @@ const TraceRow = ({
 	onSelect: () => void
 }) => {
 	const { stateWidth, durationWidth, countWidth, ageWidth, titleWidth } = getTraceRowLayout(contentWidth)
-	const title = `${trace.rootOperationName} #${trace.traceId.slice(-6)}`
+	const title = trace.isRunning
+		? `${trace.rootOperationName} #${trace.traceId.slice(-6)} [${lifecycleLabel(trace)}]`
+		: `${trace.rootOperationName} #${trace.traceId.slice(-6)}`
+	const titleColor = selected ? colors.selectedText : trace.isRunning ? colors.warning : colors.text
 
 	return (
 		<box id={traceRowId(trace.traceId)} height={1} onMouseDown={onSelect}>
 			<TextLine fg={selected ? colors.selectedText : colors.text} bg={selected ? colors.selectedBg : undefined}>
 				<span fg={traceIndicatorColor(trace)}>{fitCell(traceIndicator(trace), stateWidth)}</span>
 				<span> </span>
-				<span>{fitCell(title, titleWidth)}</span>
+				<span fg={titleColor}>{fitCell(title, titleWidth)}</span>
 				<span fg={selected ? colors.accent : colors.count}>{fitCell(formatDuration(trace.durationMs), durationWidth, "right")}</span>
 				<span fg={colors.muted}>{fitCell(`${trace.spanCount}sp`, countWidth, "right")}</span>
 				<span fg={colors.muted}>{fitCell(relativeTime(trace.startedAt), ageWidth, "right")}</span>
@@ -77,8 +80,8 @@ export const TraceList = ({
 		const countLabel = totalCount !== undefined && totalCount !== traces.length ? ` (${traces.length}/${totalCount})` : ` (${traces.length})`
 		return (
 			<AlignedHeaderLine
-				left={`${focused ? "\u25b8 " : "  "}LOCAL TRACES${countLabel}${filterLabel}${sortLabel}`}
-				right={`${selectedService ?? "waiting for traces"} \u00b7 ${services.length} svc`}
+				left={`TRACES${countLabel}${filterLabel}${sortLabel}`}
+				right={`${selectedService ?? "waiting for traces"}${services.length > 1 ? ` \u00b7 ${services.length} svc` : ""}`}
 				width={contentWidth}
 			/>
 		)

@@ -24,5 +24,4 @@ export const waterfallColors = {
 } as const
 
 export const SEPARATOR = " \u00b7 "
-export const DETAIL_DIVIDER_ROW = 7
 export const G_PREFIX_TIMEOUT_MS = 500
