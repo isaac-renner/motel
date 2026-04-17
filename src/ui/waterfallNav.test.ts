@@ -3,6 +3,7 @@ import type { TraceSpanItem } from "../domain.ts"
 import {
 	findFirstChildIndex,
 	findParentIndex,
+	getWaterfallColumns,
 	getVisibleSpans,
 } from "./Waterfall.tsx"
 import { resolveCollapseStep } from "./waterfallNav.ts"
@@ -126,6 +127,16 @@ describe("getVisibleSpans", () => {
 		expect(idsOf(getVisibleSpans(spans, new Set(["b", "b1"])))).toEqual([
 			"root", "a", "a1", "a2", "b", "c",
 		])
+	})
+})
+
+describe("getWaterfallColumns", () => {
+	it("pads duration and log columns to fill the reserved width", () => {
+		const contentWidth = 72
+		const columns = getWaterfallColumns(contentWidth, 153_000, 1, 0)
+		expect(columns.durationCell.length).toBe(columns.durationWidth)
+		expect(columns.logCell.length).toBe(columns.logWidth)
+		expect(columns.labelMaxWidth + 1 + columns.barWidth + 1 + columns.durationCell.length + columns.logCell.length).toBe(contentWidth)
 	})
 })
 

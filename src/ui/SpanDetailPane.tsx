@@ -45,7 +45,7 @@ export const SpanDetailPane = ({
 
 	return (
 		<box flexDirection="column" width={paneWidth} height={bodyLines + SPAN_DETAIL_HEADER_ROWS} overflow="hidden">
-			<box paddingLeft={1}>
+			<box paddingLeft={1} paddingRight={1}>
 				<AlignedHeaderLine left={headerTitle} right={headerRight} width={contentWidth} rightFg={headerColor} />
 			</box>
 			{span && trace ? (

@@ -177,6 +177,14 @@ export const getWaterfallLayout = (contentWidth: number, traceDurationMs: number
 	return { labelMaxWidth, durationWidth, logWidth, barWidth } as const
 }
 
+export const getWaterfallColumns = (contentWidth: number, traceDurationMs: number, durationMs: number, logCount: number) => {
+	const { labelMaxWidth, durationWidth, logWidth, barWidth } = getWaterfallLayout(contentWidth, traceDurationMs)
+	const durationCell = formatDuration(Math.max(0, durationMs)).padStart(durationWidth)
+	const logText = logCount > 0 ? `${logCount}lg` : ""
+	const logCell = logText.padStart(logWidth)
+	return { labelMaxWidth, durationWidth, logWidth, barWidth, durationCell, logCell } as const
+}
+
 export const spanPreviewEntries = (span: TraceSpanItem, logs: readonly LogItem[], maxEntries: number): Array<{ key: string; value: string; isWarning?: boolean }> => {
 	const entries = Object.entries(span.tags)
 	const interesting = entries.filter(([key]) =>
@@ -227,10 +235,8 @@ const WaterfallRow = memo(({
 	// Match the trace list indicator: `!` on error, chevron on collapsible parents, `·` on leaves.
 	const indicator = span.status === "error" ? "!" : hasChildSpans ? (collapsed ? "\u25b8" : "\u25be") : "\u00b7"
 	const opName = span.isRunning ? `${span.operationName} [${lifecycleLabel(span)}]` : span.operationName
-	const duration = formatDuration(Math.max(0, span.durationMs))
-	const logText = logCount > 0 ? `${logCount}lg` : ""
 
-	const { labelMaxWidth, logWidth, barWidth } = getWaterfallLayout(contentWidth, trace.durationMs)
+	const { labelMaxWidth, barWidth, durationCell, logCell } = getWaterfallColumns(contentWidth, trace.durationMs, span.durationMs, logCount)
 
 	const opMaxWidth = Math.max(4, labelMaxWidth - prefix.length - 2)
 	const opTruncated = opName.length > opMaxWidth ? `${opName.slice(0, opMaxWidth - 1)}\u2026` : opName
@@ -246,9 +252,8 @@ const WaterfallRow = memo(({
 	const indicatorColor = isError ? colors.error : hasChildSpans ? (selected ? colors.selectedText : colors.muted) : colors.passing
 	const opColor = selected ? colors.selectedText : span.isRunning ? colors.warning : colors.text
 
-	const durationStr = duration
-	const logPad = logText.length > 0 && durationStr.length > 0 ? " " : ""
 	const durationFg = durationColor(span.durationMs)
+	const logFg = logCount > 0 ? colors.defaultService : colors.muted
 
 	return (
 		<box height={1} onMouseDown={onSelect}>
@@ -261,10 +266,9 @@ const WaterfallRow = memo(({
 				{segments.map((segment, index) => (
 					<span key={`${span.spanId}-bar-${index}`} fg={segment.fg} bg={segment.bg}>{segment.text}</span>
 				))}
-				{durationStr ? <span> </span> : null}
-				<span fg={durationFg}>{durationStr}</span>
-				<span>{logPad}</span>
-				<span fg={logCount > 0 ? colors.defaultService : colors.muted}>{logText}</span>
+				<span> </span>
+				<span fg={durationFg}>{durationCell}</span>
+				<span fg={logFg}>{logCell}</span>
 			</TextLine>
 		</box>
 	)
