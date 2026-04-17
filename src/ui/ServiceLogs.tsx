@@ -27,7 +27,7 @@ export const ServiceLogsView = ({
 	const messageWidth = Math.max(16, contentWidth - timeWidth - levelWidth - traceWidth - 3)
 
 	if (logsState.status === "loading" && logsState.data.length === 0) {
-		return <PlainLine text="Loading recent service logs..." fg={colors.muted} />
+		return <PlainLine text="Loading recent service logs..." fg={colors.count} />
 	}
 
 	if (logsState.status === "error") {

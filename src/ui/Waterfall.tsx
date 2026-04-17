@@ -76,29 +76,87 @@ const buildTreePrefix = (spans: readonly TraceSpanItem[], index: number): string
 	return parts.reverse().join("")
 }
 
-const renderWaterfallBar = (span: TraceSpanItem, trace: TraceItem, barWidth: number): { before: string; bar: string; after: string; barStart: number; barEnd: number } => {
+const PARTIAL_BLOCKS = ["", "\u258f", "\u258e", "\u258d", "\u258c", "\u258b", "\u258a", "\u2589", "\u2588"] as const
+const ULTRA_SHORT_MARKERS = ["\u258f", "\u258e", "\u258d", "\u258c"] as const
+
+type WaterfallBarSegment = {
+	readonly text: string
+	readonly fg: string
+	readonly bg?: string
+}
+
+const renderWaterfallBar = (
+	span: TraceSpanItem,
+	trace: TraceItem,
+	barWidth: number,
+	barColor: string,
+	laneColor: string,
+): { readonly segments: readonly WaterfallBarSegment[]; readonly afterCells: number } => {
 	if (barWidth < 3 || trace.durationMs === 0) {
-		return { before: "", bar: "\u2588", after: "", barStart: 0, barEnd: 1 }
+		return {
+			segments: [{ text: "\u2588", fg: barColor }],
+			afterCells: Math.max(0, barWidth - 1),
+		}
 	}
 
 	const traceStart = trace.startedAt.getTime()
 	const spanStart = span.startTime.getTime()
 	const relativeStart = Math.max(0, spanStart - traceStart)
 	const startFrac = relativeStart / trace.durationMs
-	const widthFrac = Math.max(0.01, span.durationMs / trace.durationMs)
+	const endFrac = Math.min(1, Math.max(startFrac, (relativeStart + Math.max(0, span.durationMs)) / trace.durationMs))
+	const totalUnits = barWidth * 8
+	const startUnits = Math.max(0, Math.min(totalUnits - 1, Math.floor(startFrac * totalUnits)))
+	const endUnits = Math.max(startUnits + 1, Math.min(totalUnits, Math.ceil(endFrac * totalUnits)))
+	const startCell = Math.floor(startUnits / 8)
+	const endCell = Math.floor((endUnits - 1) / 8)
+	const startOffset = startUnits % 8
+	const endOffset = endUnits % 8
+	const segments: WaterfallBarSegment[] = []
 
-	const barStart = Math.min(Math.round(startFrac * barWidth), barWidth - 1)
-	const barLen = Math.max(1, Math.round(widthFrac * barWidth))
-	const barEnd = Math.min(barWidth, barStart + barLen)
-	const barChars = Math.max(1, barEnd - barStart)
-	const afterLen = Math.max(0, barWidth - barStart - barChars)
+	if (startCell > 0) {
+		segments.push({ text: "\u00b7".repeat(startCell), fg: laneColor })
+	}
+
+	if (startCell === endCell) {
+		const singleCellUnits = Math.max(1, endUnits - startUnits)
+		if (singleCellUnits <= 4) {
+			const centeredMarker = ULTRA_SHORT_MARKERS[Math.max(0, singleCellUnits - 1)] ?? "\u258f"
+			segments.push({ text: centeredMarker, fg: barColor, bg: laneColor })
+			return {
+				segments,
+				afterCells: Math.max(0, barWidth - startCell - 1),
+			}
+		}
+
+		if (startOffset === 0) {
+			segments.push({ text: PARTIAL_BLOCKS[singleCellUnits], fg: barColor, bg: laneColor })
+		} else {
+			segments.push({ text: PARTIAL_BLOCKS[startOffset], fg: laneColor, bg: barColor })
+		}
+		return {
+			segments,
+			afterCells: Math.max(0, barWidth - startCell - 1),
+		}
+	}
+
+	if (startOffset > 0) {
+		segments.push({ text: PARTIAL_BLOCKS[startOffset], fg: laneColor, bg: barColor })
+	}
+
+	const fullStartCell = startCell + (startOffset > 0 ? 1 : 0)
+	const fullEndCell = endCell - (endOffset > 0 ? 1 : 0)
+	const fullCells = Math.max(0, fullEndCell - fullStartCell + 1)
+	if (fullCells > 0) {
+		segments.push({ text: "\u2588".repeat(fullCells), fg: barColor })
+	}
+
+	if (endOffset > 0) {
+		segments.push({ text: PARTIAL_BLOCKS[endOffset], fg: barColor, bg: laneColor })
+	}
 
 	return {
-		before: "\u00b7".repeat(barStart),
-		bar: "\u2588".repeat(barChars),
-		after: "\u00b7".repeat(afterLen),
-		barStart,
-		barEnd,
+		segments,
+		afterCells: Math.max(0, barWidth - endCell - 1),
 	}
 }
 
@@ -159,9 +217,8 @@ const WaterfallRow = memo(({
 	onSelect: () => void
 }) => {
 	const prefix = buildTreePrefix(spans, index)
-	// Drop the redundant `·` bullet on leaf rows — the tree lines carry the hierarchy.
-	// Only show error marker or chevron for collapsible parent spans.
-	const indicator = span.status === "error" ? "!" : hasChildSpans ? (collapsed ? "\u25b8" : "\u25be") : " "
+	// Match the trace list indicator: `!` on error, chevron on collapsible parents, `·` on leaves.
+	const indicator = span.status === "error" ? "!" : hasChildSpans ? (collapsed ? "\u25b8" : "\u25be") : "\u00b7"
 	const opName = span.isRunning ? `${span.operationName} [${lifecycleLabel(span)}]` : span.operationName
 	// Hide sub-millisecond duration labels — zero useful info for rows that all read "0.00ms"
 	const duration = span.durationMs >= 1 ? formatDuration(span.durationMs) : ""
@@ -174,22 +231,19 @@ const WaterfallRow = memo(({
 	const labelLen = prefix.length + 2 + opTruncated.length
 	const labelPad = " ".repeat(Math.max(0, labelMaxWidth - labelLen))
 
-	const { before, bar, after } = renderWaterfallBar(span, trace, barWidth)
 	const isError = span.status === "error"
 	const barColor = selected ? (isError ? waterfallColors.barSelectedError : waterfallColors.barSelected) : isError ? waterfallColors.barError : waterfallColors.bar
+	const laneColor = waterfallColors.barBg
+	const { segments, afterCells } = renderWaterfallBar(span, trace, barWidth, barColor, laneColor)
 	const bg = selected ? colors.selectedBg : undefined
 	const treeColor = selected ? colors.separator : colors.treeLine
-	const indicatorColor = isError ? colors.error : selected ? colors.passing : colors.muted
+	const indicatorColor = isError ? colors.error : hasChildSpans ? (selected ? colors.selectedText : colors.muted) : colors.passing
 	const opColor = selected ? colors.selectedText : span.isRunning ? colors.warning : colors.text
 
 	// Place duration immediately after the bar (not at a fixed right-aligned column).
 	// Fill the rest with transparent padding so the logText stays right-aligned.
-	const barStartIdx = before.length
-	const barEndIdx = barStartIdx + bar.length
-	// `after` is the remaining bar-column after the bar. We replace its prefix with
-	// the duration label so it sits flush to the bar end, then pad with spaces.
 	const durationStr = duration
-	const spaceAfterLen = Math.max(0, after.length - (durationStr ? durationStr.length + 1 : 0))
+	const spaceAfterLen = Math.max(0, afterCells - (durationStr ? durationStr.length + 1 : 0))
 	const durationGap = durationStr ? " " : ""
 
 	return (
@@ -200,8 +254,9 @@ const WaterfallRow = memo(({
 				<span fg={opColor}>{` ${opTruncated}`}</span>
 				<span>{labelPad}</span>
 				<span> </span>
-				<span fg={waterfallColors.barBg}>{before}</span>
-				<span fg={barColor}>{bar}</span>
+				{segments.map((segment, index) => (
+					<span key={`${span.spanId}-bar-${index}`} fg={segment.fg} bg={segment.bg}>{segment.text}</span>
+				))}
 				<span>{durationGap}</span>
 				<span fg={selected ? colors.accent : colors.count}>{durationStr}</span>
 				<span>{" ".repeat(spaceAfterLen)}</span>

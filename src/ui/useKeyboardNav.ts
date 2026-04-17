@@ -346,7 +346,7 @@ export const useKeyboardNav = (params: KeyboardNavParams) => {
 			return
 		}
 		if (key.name === "s") {
-			const modes: readonly TraceSortMode[] = ["recent", "slowest", "fastest", "errors"]
+			const modes: readonly TraceSortMode[] = ["recent", "slowest", "errors"]
 			const nextMode = modes[(modes.indexOf(s.traceSort) + 1) % modes.length] ?? "recent"
 			setTraceSort(nextMode)
 			s.flashNotice(`Sort: ${nextMode}`)

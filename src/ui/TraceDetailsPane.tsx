@@ -1,13 +1,16 @@
 import { useMemo } from "react"
-import type { TraceItem } from "../domain.ts"
+import type { TraceItem, TraceSummaryItem } from "../domain.ts"
 import { formatDuration, formatShortDate, formatTimestamp, lifecycleLabel } from "./format.ts"
 import { AlignedHeaderLine, BlankRow, Divider, PlainLine, SeparatorColumn, TextLine } from "./primitives.tsx"
 import { SpanDetailView } from "./SpanDetail.tsx"
 import { getVisibleSpans, SpanPreview, spanPreviewEntries, WaterfallTimeline } from "./Waterfall.tsx"
-import type { DetailView, LogState } from "./state.ts"
+import type { DetailView, LoadStatus, LogState } from "./state.ts"
 import { colors, SEPARATOR } from "./theme.ts"
 export const TraceDetailsPane = ({
 	trace,
+	traceSummary,
+	traceStatus,
+	traceError,
 	traceLogsState,
 	contentWidth,
 	bodyLines,
@@ -19,6 +22,9 @@ export const TraceDetailsPane = ({
 	onSelectSpan,
 }: {
 	trace: TraceItem | null
+	traceSummary: TraceSummaryItem | null
+	traceStatus: LoadStatus
+	traceError: string | null
 	traceLogsState: LogState
 	contentWidth: number
 	bodyLines: number
@@ -47,6 +53,8 @@ export const TraceDetailsPane = ({
 		() => selectedSpan ? traceLogsState.data.filter((log) => log.spanId === selectedSpan.spanId) : [],
 		[selectedSpan, traceLogsState.data],
 	)
+	const traceMeta = trace ?? traceSummary
+	const isLoadingTrace = traceStatus === "loading" && traceSummary !== null && trace === null
 	const focusIndicator = focused ? "\u25b8 " : ""
 	const detailHeaderTitle = detailView === "span-detail" && selectedSpan
 		? `${focusIndicator}SPAN DETAIL`
@@ -56,18 +64,22 @@ export const TraceDetailsPane = ({
 	// status (errors / healthy / running), duration, logs.
 	const detailHeaderRight = detailView === "span-detail" && selectedSpan
 		? `${selectedSpan.status} \u00b7 ${formatDuration(selectedSpan.durationMs)}${selectedSpanLogs.length > 0 ? ` \u00b7 ${selectedSpanLogs.length} logs` : ""}`
-		: trace
-			? `${trace.errorCount > 0 ? `${trace.errorCount} errors` : trace.isRunning ? "running" : "healthy"} \u00b7 ${formatDuration(trace.durationMs)}${traceLogCount > 0 ? ` \u00b7 ${traceLogCount} logs` : ""}`
-			: "waiting for trace"
+		: traceMeta
+			? `${traceMeta.errorCount > 0 ? `${traceMeta.errorCount} errors` : traceMeta.isRunning ? "running" : isLoadingTrace ? "loading" : "healthy"} \u00b7 ${formatDuration(traceMeta.durationMs)}${traceLogCount > 0 ? ` \u00b7 ${traceLogCount} logs` : ""}`
+			: traceStatus === "error"
+				? "trace unavailable"
+				: "waiting for trace"
 	const detailHeaderColor = detailView === "span-detail" && selectedSpan
 		? selectedSpan.isRunning
 			? colors.warning
 			: selectedSpan.status === "error"
 			? colors.error
 			: colors.passing
-		: trace?.isRunning
+		: isLoadingTrace
+			? colors.count
+			: traceMeta?.isRunning
 			? colors.warning
-			: trace && trace.errorCount > 0
+			: traceMeta && traceMeta.errorCount > 0
 			? colors.error
 			: colors.passing
 
@@ -91,12 +103,12 @@ export const TraceDetailsPane = ({
 	const waterfallBodyLines = Math.max(4, bodyLines - previewReserved)
 
 	// Date string for the operation row
-	const dateStr = trace ? `${formatShortDate(trace.startedAt)} ${formatTimestamp(trace.startedAt)}` : ""
-	const opLeft = trace?.rootOperationName ?? ""
+	const dateStr = traceMeta ? `${formatShortDate(traceMeta.startedAt)} ${formatTimestamp(traceMeta.startedAt)}` : ""
+	const opLeft = traceMeta?.rootOperationName ?? ""
 	const opGap = Math.max(2, contentWidth - opLeft.length - dateStr.length)
 	// Warnings badge — truncate the first one; tooltip-style full text hidden
-	const warningCount = trace?.warnings.length ?? 0
-	const firstWarning = trace?.warnings[0] ?? ""
+	const warningCount = traceMeta?.warnings.length ?? 0
+	const firstWarning = traceMeta?.warnings[0] ?? ""
 
 	return (
 		<box flexDirection="column" height={bodyLines + headerRows}>
@@ -182,6 +194,31 @@ export const TraceDetailsPane = ({
 					</>
 				)}
 			</>
+		) : isLoadingTrace && traceMeta ? (
+			<>
+				<box flexDirection="column" paddingLeft={1} paddingRight={1}>
+					<TextLine>
+						<span>{opLeft}</span>
+						<span>{" ".repeat(opGap)}</span>
+						<span fg={colors.muted}>{dateStr}</span>
+					</TextLine>
+					<TextLine>
+						<span fg={colors.defaultService}>{traceMeta.serviceName}</span>
+						<span fg={colors.separator}>{SEPARATOR}</span>
+						<span fg={colors.count}>{traceMeta.spanCount} spans</span>
+						<span fg={colors.separator}>{SEPARATOR}</span>
+						<span fg={colors.count}>warming adjacent trace...</span>
+					</TextLine>
+				</box>
+				<Divider width={paneWidth} />
+				<box flexDirection="column" paddingLeft={1} paddingRight={1}>
+					<PlainLine text="Loading trace details..." fg={colors.count} />
+				</box>
+			</>
+		) : traceStatus === "error" ? (
+			<box flexDirection="column" paddingLeft={1} paddingRight={1}>
+				<PlainLine text={traceError ?? "Could not load trace."} fg={colors.error} />
+			</box>
 		) : (
 				<box flexDirection="column" paddingLeft={1} paddingRight={1}>
 					<PlainLine text="No trace selected. Use j/k in the trace list." fg={colors.muted} />

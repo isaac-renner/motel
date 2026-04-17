@@ -9,7 +9,7 @@ import { LogQueryService } from "../services/LogQueryService.ts"
 import { TraceQueryService } from "../services/TraceQueryService.ts"
 
 export type LoadStatus = "loading" | "ready" | "error"
-export type DetailView = "waterfall" | "span-detail" | "service-logs"
+export type DetailView = "waterfall" | "span-detail-full" | "service-logs"
 
 export interface TraceState {
 	readonly status: LoadStatus
@@ -105,7 +105,7 @@ export const autoRefreshAtom = Atom.make(false).pipe(Atom.keepAlive)
 export const filterModeAtom = Atom.make(false).pipe(Atom.keepAlive)
 export const filterTextAtom = Atom.make("").pipe(Atom.keepAlive)
 
-export type TraceSortMode = "recent" | "slowest" | "fastest" | "errors"
+export type TraceSortMode = "recent" | "slowest" | "errors"
 export const traceSortAtom = Atom.make<TraceSortMode>("recent").pipe(Atom.keepAlive)
 export const collapsedSpanIdsAtom = Atom.make(new Set<string>() as ReadonlySet<string>).pipe(Atom.keepAlive)
 

@@ -95,9 +95,12 @@ export const App = () => {
 	const noticeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 	const traceListScrollRef = useRef<ScrollBoxRenderable | null>(null)
 	const selectedTraceRef = useRef<string | null>(null)
+	const cacheEpochRef = useRef(0)
 	const traceDetailCacheRef = useRef(new Map<string, { data: TraceItem | null; fetchedAt: Date }>())
 	const traceLogCacheRef = useRef(new Map<string, { data: readonly LogItem[]; fetchedAt: Date }>())
 	const serviceLogCacheRef = useRef(new Map<string, { data: readonly LogItem[]; fetchedAt: Date }>())
+	const traceDetailInflightRef = useRef(new Map<string, Promise<{ readonly error: string | null }>>())
+	const traceLogInflightRef = useRef(new Map<string, Promise<{ readonly error: string | null }>>())
 
 	const flashNotice = (message: string) => {
 		if (noticeTimeoutRef.current !== null) {
@@ -128,9 +131,12 @@ export const App = () => {
 	}, [autoRefresh])
 
 	useEffect(() => {
+		cacheEpochRef.current += 1
 		traceDetailCacheRef.current.clear()
 		traceLogCacheRef.current.clear()
 		serviceLogCacheRef.current.clear()
+		traceDetailInflightRef.current.clear()
+		traceLogInflightRef.current.clear()
 	}, [refreshNonce])
 
 	// Load traces
@@ -202,6 +208,118 @@ export const App = () => {
 	const selectedTrace = traceDetailState.traceId === selectedTraceId ? traceDetailState.data : null
 	selectedTraceRef.current = selectedTraceId
 
+	const warmTraceDetail = useCallback((traceId: string, hydrateSelection: boolean) => {
+		const cached = traceDetailCacheRef.current.get(traceId)
+		if (cached) {
+			if (hydrateSelection && selectedTraceRef.current === traceId) {
+				setTraceDetailState({
+					status: "ready",
+					traceId,
+					data: cached.data,
+					error: null,
+					fetchedAt: cached.fetchedAt,
+				})
+			}
+			return Promise.resolve({ error: null })
+		}
+
+		const existing = traceDetailInflightRef.current.get(traceId)
+		if (existing) {
+			if (hydrateSelection) {
+				void existing.then(({ error }) => {
+					if (selectedTraceRef.current !== traceId) return
+					const ready = traceDetailCacheRef.current.get(traceId)
+					if (ready) {
+						setTraceDetailState({ status: "ready", traceId, data: ready.data, error: null, fetchedAt: ready.fetchedAt })
+						return
+					}
+					if (error) {
+						setTraceDetailState({ status: "error", traceId, data: null, error, fetchedAt: null })
+					}
+				})
+			}
+			return existing
+		}
+
+		const epoch = cacheEpochRef.current
+		const request = loadTraceDetail(traceId)
+			.then((trace) => {
+				if (cacheEpochRef.current !== epoch) return { error: null }
+				const fetchedAt = new Date()
+				traceDetailCacheRef.current.set(traceId, { data: trace, fetchedAt })
+				if (hydrateSelection && selectedTraceRef.current === traceId) {
+					setTraceDetailState({ status: "ready", traceId, data: trace, error: null, fetchedAt })
+				}
+				return { error: null }
+			})
+			.catch((error) => {
+				const message = error instanceof Error ? error.message : String(error)
+				if (cacheEpochRef.current === epoch && hydrateSelection && selectedTraceRef.current === traceId) {
+					setTraceDetailState({ status: "error", traceId, data: null, error: message, fetchedAt: null })
+				}
+				return { error: message }
+			})
+			.finally(() => {
+				traceDetailInflightRef.current.delete(traceId)
+			})
+
+		traceDetailInflightRef.current.set(traceId, request)
+		return request
+	}, [setTraceDetailState])
+
+	const warmTraceLogs = useCallback((traceId: string, hydrateSelection: boolean) => {
+		const cached = traceLogCacheRef.current.get(traceId)
+		if (cached) {
+			if (hydrateSelection && selectedTraceRef.current === traceId) {
+				setLogState({ status: "ready", traceId, data: cached.data, error: null, fetchedAt: cached.fetchedAt })
+			}
+			return Promise.resolve({ error: null })
+		}
+
+		const existing = traceLogInflightRef.current.get(traceId)
+		if (existing) {
+			if (hydrateSelection) {
+				void existing.then(({ error }) => {
+					if (selectedTraceRef.current !== traceId) return
+					const ready = traceLogCacheRef.current.get(traceId)
+					if (ready) {
+						setLogState({ status: "ready", traceId, data: ready.data, error: null, fetchedAt: ready.fetchedAt })
+						return
+					}
+					if (error) {
+						setLogState({ status: "error", traceId, data: [], error, fetchedAt: null })
+					}
+				})
+			}
+			return existing
+		}
+
+		const epoch = cacheEpochRef.current
+		const request = loadTraceLogs(traceId)
+			.then((logs) => {
+				if (cacheEpochRef.current !== epoch) return { error: null }
+				const fetchedAt = new Date()
+				traceLogCacheRef.current.set(traceId, { data: logs, fetchedAt })
+				if (hydrateSelection && selectedTraceRef.current === traceId) {
+					setLogState({ status: "ready", traceId, data: logs, error: null, fetchedAt })
+				}
+				return { error: null }
+			})
+			.catch((error) => {
+				const message = error instanceof Error ? error.message : String(error)
+				if (cacheEpochRef.current === epoch && hydrateSelection && selectedTraceRef.current === traceId) {
+					setLogState({ status: "error", traceId, data: [], error: message, fetchedAt: null })
+				}
+				return { error: message }
+			})
+			.finally(() => {
+				traceLogInflightRef.current.delete(traceId)
+			})
+
+		traceLogInflightRef.current.set(traceId, request)
+		return request
+	}, [setLogState])
+
 	useEffect(() => {
 		if (!selectedTraceId) {
 			setTraceDetailState(initialTraceDetailState)
@@ -220,8 +338,6 @@ export const App = () => {
 			return
 		}
 
-		let cancelled = false
-
 		setTraceDetailState((current) => ({
 			status: current.traceId === selectedTraceId && current.fetchedAt !== null ? "ready" : "loading",
 			traceId: selectedTraceId,
@@ -230,34 +346,8 @@ export const App = () => {
 			fetchedAt: current.traceId === selectedTraceId ? current.fetchedAt : null,
 		}))
 
-		void (async () => {
-			try {
-				const trace = await loadTraceDetail(selectedTraceId)
-				const fetchedAt = new Date()
-				traceDetailCacheRef.current.set(selectedTraceId, { data: trace, fetchedAt })
-				if (cancelled) return
-
-				setTraceDetailState({
-					status: "ready",
-					traceId: selectedTraceId,
-					data: trace,
-					error: null,
-					fetchedAt,
-				})
-			} catch (error) {
-				if (cancelled) return
-				setTraceDetailState({
-					status: "error",
-					traceId: selectedTraceId,
-					data: null,
-					error: error instanceof Error ? error.message : String(error),
-					fetchedAt: null,
-				})
-			}
-		})()
-
-		return () => { cancelled = true }
-	}, [refreshNonce, selectedTraceId, setTraceDetailState])
+		void warmTraceDetail(selectedTraceId, true)
+	}, [refreshNonce, selectedTraceId, setTraceDetailState, warmTraceDetail])
 
 	// Reset collapsed spans and span selection when trace changes
 	useEffect(() => {
@@ -300,8 +390,6 @@ export const App = () => {
 			return
 		}
 
-		let cancelled = false
-
 		setLogState((current) => ({
 			status: current.traceId === traceId && current.fetchedAt !== null ? "ready" : "loading",
 			traceId,
@@ -310,21 +398,8 @@ export const App = () => {
 			fetchedAt: current.traceId === traceId ? current.fetchedAt : null,
 		}))
 
-		void (async () => {
-			try {
-				const logs = await loadTraceLogs(traceId)
-				const fetchedAt = new Date()
-				traceLogCacheRef.current.set(traceId, { data: logs, fetchedAt })
-				if (cancelled) return
-				setLogState({ status: "ready", traceId, data: logs, error: null, fetchedAt })
-			} catch (error) {
-				if (cancelled) return
-				setLogState({ status: "error", traceId, data: [], error: error instanceof Error ? error.message : String(error), fetchedAt: null })
-			}
-		})()
-
-		return () => { cancelled = true }
-	}, [refreshNonce, selectedTraceId, setLogState])
+		void warmTraceLogs(traceId, true)
+	}, [refreshNonce, selectedTraceId, setLogState, warmTraceLogs])
 
 	// Load service logs
 	useEffect(() => {
@@ -393,10 +468,22 @@ export const App = () => {
 		? preFilterTraces
 		: [...preFilterTraces].sort((a, b) => {
 			if (traceSort === "slowest") return b.durationMs - a.durationMs
-			if (traceSort === "fastest") return a.durationMs - b.durationMs
 			if (traceSort === "errors") return b.errorCount - a.errorCount || b.startedAt.getTime() - a.startedAt.getTime()
 			return 0
 		})
+
+	useEffect(() => {
+		if (!selectedTraceId || filteredTraces.length === 0) return
+		const currentIndex = filteredTraces.findIndex((trace) => trace.traceId === selectedTraceId)
+		if (currentIndex < 0) return
+
+		for (const offset of [-1, 1] as const) {
+			const neighborId = filteredTraces[currentIndex + offset]?.traceId
+			if (!neighborId) continue
+			void warmTraceDetail(neighborId, false)
+			void warmTraceLogs(neighborId, false)
+		}
+	}, [filteredTraces, selectedTraceId, warmTraceDetail, warmTraceLogs])
 
 	// Keyboard navigation
 	const { spanNavActive } = useKeyboardNav({
@@ -492,7 +579,7 @@ export const App = () => {
 				</box>
 			) : expandedTraceView ? (
 				<box flexGrow={1} flexDirection="column">
-					<TraceDetailsPane trace={selectedTrace} traceLogsState={logState} contentWidth={fullContentWidth} bodyLines={fullBodyLines} paneWidth={contentWidth} selectedSpanIndex={selectedSpanIndex} collapsedSpanIds={collapsedSpanIds} detailView={detailView} focused={spanNavActive} onSelectSpan={selectSpan} />
+					<TraceDetailsPane trace={selectedTrace} traceSummary={selectedTraceSummary} traceStatus={traceDetailState.status} traceError={traceDetailState.error} traceLogsState={logState} contentWidth={fullContentWidth} bodyLines={fullBodyLines} paneWidth={contentWidth} selectedSpanIndex={selectedSpanIndex} collapsedSpanIds={collapsedSpanIds} detailView={detailView} focused={spanNavActive} onSelectSpan={selectSpan} />
 				</box>
 			) : isWideLayout ? (
 				<box flexGrow={1} flexDirection="row">
@@ -505,12 +592,12 @@ export const App = () => {
 					</box>
 					<SeparatorColumn height={wideBodyHeight} junctionRows={separatorJunctionRows} />
 					<box width={rightPaneWidth} height={wideBodyHeight} flexDirection="column">
-						<TraceDetailsPane trace={selectedTrace} traceLogsState={logState} contentWidth={rightContentWidth} bodyLines={wideBodyLines} paneWidth={rightPaneWidth} selectedSpanIndex={selectedSpanIndex} collapsedSpanIds={collapsedSpanIds} detailView={detailView} focused={spanNavActive} onSelectSpan={selectSpan} />
+						<TraceDetailsPane trace={selectedTrace} traceSummary={selectedTraceSummary} traceStatus={traceDetailState.status} traceError={traceDetailState.error} traceLogsState={logState} contentWidth={rightContentWidth} bodyLines={wideBodyLines} paneWidth={rightPaneWidth} selectedSpanIndex={selectedSpanIndex} collapsedSpanIds={collapsedSpanIds} detailView={detailView} focused={spanNavActive} onSelectSpan={selectSpan} />
 					</box>
 				</box>
 			) : (
 				<>
-					<TraceDetailsPane trace={selectedTrace} traceLogsState={logState} contentWidth={rightContentWidth} bodyLines={narrowBodyLines} paneWidth={contentWidth} selectedSpanIndex={selectedSpanIndex} collapsedSpanIds={collapsedSpanIds} detailView={detailView} focused={spanNavActive} onSelectSpan={selectSpan} />
+					<TraceDetailsPane trace={selectedTrace} traceSummary={selectedTraceSummary} traceStatus={traceDetailState.status} traceError={traceDetailState.error} traceLogsState={logState} contentWidth={rightContentWidth} bodyLines={narrowBodyLines} paneWidth={contentWidth} selectedSpanIndex={selectedSpanIndex} collapsedSpanIds={collapsedSpanIds} detailView={detailView} focused={spanNavActive} onSelectSpan={selectSpan} />
 					<Divider width={contentWidth} />
 					<box height={narrowListHeight} flexDirection="column" paddingLeft={sectionPadding} paddingRight={sectionPadding}>
 						<TraceList showHeader {...traceListProps} />
