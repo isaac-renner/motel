@@ -143,10 +143,10 @@ export const TraceWorkspace = ({
 			)
 		}
 
-		// L1: the user pressed enter on a trace — hide the list entirely and
-		// let the waterfall take the full width. `leftPaneWidth` is already
-		// `contentWidth` in this case (see useAppLayout), so one pane fills
-		// the row.
+		// L1: the user drilled into a trace — hide the list entirely and show
+		// waterfall (60%) alongside a live span preview (40%). The preview
+		// updates as j/k moves selection in the waterfall; it's read-only at
+		// this phase (no independent focus — that's Phase 2).
 		if (viewLevel === 1) {
 			return (
 				<box flexGrow={1} flexDirection="row">
@@ -157,13 +157,25 @@ export const TraceWorkspace = ({
 							traceStatus={traceDetailState.status}
 							traceError={traceDetailState.error}
 							traceLogsState={logState}
-							contentWidth={Math.max(24, leftPaneWidth - sectionPadding * 2)}
+							contentWidth={leftContentWidth}
 							bodyLines={wideBodyLines}
 							paneWidth={leftPaneWidth}
 							selectedSpanIndex={selectedSpanIndex}
 							collapsedSpanIds={collapsedSpanIds}
 							focused={true}
 							waterfallFilterMode={waterfallFilterMode} waterfallFilterText={waterfallFilterText} onSelectSpan={selectSpan}
+						/>
+					</box>
+					<SeparatorColumn height={wideBodyHeight} junctionChars={separatorCrossChars} />
+					<box width={rightPaneWidth} height={wideBodyHeight} flexDirection="column">
+						<SpanDetailPane
+							span={selectedSpan}
+							trace={selectedTrace}
+							logs={selectedSpanLogs}
+							contentWidth={rightContentWidth}
+							bodyLines={wideBodyLines}
+							paneWidth={rightPaneWidth}
+							focused={false}
 						/>
 					</box>
 				</box>

@@ -25,22 +25,22 @@ export const useAppLayout = ({ width, height, notice, detailView, selectedSpanIn
 		detailView === "span-detail" ? 2 :
 		selectedSpanIndex !== null ? 1 :
 		0
-	// At L0 we show list + preview side-by-side. Once drilled in (L1/L2) the
-	// trace list is hidden entirely and the detail pane(s) take the full
-	// width — either one pane (waterfall at L1) or a 50/50 split between
-	// waterfall and span detail at L2.
-	const splitRatio = viewLevelForLayout === 2 ? 0.5 : 0.4
+	// Split ratios for the two-pane body:
+	//   L0 (trace list + trace preview):  40% / 60%  — list narrow, preview wide
+	//   L1 (waterfall + span preview):    60% / 40%  — always-on span preview,
+	//                                                  read-only at this phase
+	//   L2 (waterfall + focused detail):  50% / 50%  — detail focused (Phase 2
+	//                                                  will re-tune to 35/65)
+	// Once drilled in (L1/L2) the trace list is hidden entirely; both panes
+	// come from the trace-detail view.
+	const splitRatio = viewLevelForLayout === 2 ? 0.5 : viewLevelForLayout === 1 ? 0.6 : 0.4
 	const listHidden = viewLevelForLayout >= 1
 	const leftPaneWidth = !isWideLayout
 		? contentWidth
-		: listHidden
-			? (viewLevelForLayout === 2 ? Math.max(40, Math.floor((contentWidth - splitGap) * splitRatio)) : contentWidth)
-			: Math.max(40, Math.floor((contentWidth - splitGap) * splitRatio))
+		: Math.max(40, Math.floor((contentWidth - splitGap) * splitRatio))
 	const rightPaneWidth = !isWideLayout
 		? contentWidth
-		: listHidden && viewLevelForLayout !== 2
-			? 0
-			: Math.max(28, contentWidth - leftPaneWidth - splitGap)
+		: Math.max(28, contentWidth - leftPaneWidth - splitGap)
 	// Left pane: paddingLeft (1) + scrollbar column (1). No right padding —
 	// the vertical pane divider handles visual separation from the right pane.
 	const leftContentWidth = isWideLayout ? Math.max(24, leftPaneWidth - 2) : Math.max(24, contentWidth - sectionPadding * 2)
