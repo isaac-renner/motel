@@ -422,8 +422,24 @@ export const WaterfallTimeline = ({
 	// row's duration cell lines up on the same right-edge column.
 	const suffixMetrics = getWaterfallSuffixMetrics(windowSpans)
 
+	// Mouse wheel moves the span selection by the scroll delta. The waterfall
+	// uses virtual windowing (not a scrollbox) so native scroll does nothing;
+	// we convert wheel events into selection moves, which the windowing code
+	// already translates into visible-viewport shifts.
+	const handleWheel = (event: { scroll?: { direction: string; delta: number }; stopPropagation?: () => void }) => {
+		const info = event.scroll
+		if (!info || filteredSpans.length === 0) return
+		const magnitude = Math.max(1, Math.round(info.delta))
+		const signed = info.direction === "up" ? -magnitude : info.direction === "down" ? magnitude : 0
+		if (signed === 0) return
+		const start = selectedSpanIndex ?? 0
+		const next = Math.max(0, Math.min(start + signed, filteredSpans.length - 1))
+		if (next !== selectedSpanIndex) onSelectSpan(next)
+		event.stopPropagation?.()
+	}
+
 	return (
-		<box flexDirection="column">
+		<box flexDirection="column" onMouseScroll={handleWheel}>
 			{windowSpans.map((span, index) => {
 				const actualIndex = windowStart + index
 				const fullIndex = spanIndexById.get(span.spanId) ?? -1

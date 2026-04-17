@@ -31,7 +31,12 @@ export const TraceListPane = ({
 	<box height={containerHeight} flexDirection="column" paddingLeft={padding} paddingRight={0}>
 		<TraceList showHeader {...traceListProps} />
 		{filterMode ? <FilterBar text={filterText} width={filterWidth} /> : null}
-		<scrollbox ref={scrollRef} height={filterMode ? bodyHeight - 1 : bodyHeight} flexGrow={0}>
+		<scrollbox
+			ref={scrollRef}
+			height={filterMode ? bodyHeight - 1 : bodyHeight}
+			flexGrow={0}
+			verticalScrollbarOptions={{ visible: false }}
+		>
 			<TraceList showHeader={false} {...traceListProps} />
 		</scrollbox>
 	</box>
