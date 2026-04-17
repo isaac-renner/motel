@@ -1,6 +1,6 @@
 import { useAtom } from "@effect/atom-react"
 import { useKeyboard, useRenderer } from "@opentui/react"
-import { useLayoutEffect, useRef } from "react"
+import { useEffect, useLayoutEffect, useRef } from "react"
 import type { TraceItem, TraceSummaryItem } from "../domain.ts"
 import { otelServerInstructions } from "../instructions.ts"
 import { copyToClipboard, traceUiUrl, webUiUrl } from "./format.ts"
@@ -33,6 +33,33 @@ import { G_PREFIX_TIMEOUT_MS } from "./theme.ts"
 import { cycleThemeName, themeLabel } from "./theme.ts"
 import { getVisibleSpans } from "./Waterfall.tsx"
 import { resolveCollapseStep } from "./waterfallNav.ts"
+
+/**
+ * Pull a printable string out of a key event. Handles two cases:
+ *
+ * 1. A plain printable key (1 char) — returns the char.
+ * 2. A multi-char sequence that arrived as one event (common when the
+ *    terminal has bracketed paste disabled but the user pasted quickly and
+ *    opentui's parser returned the whole buffer as one key). Returns the
+ *    sanitised sequence with control bytes stripped.
+ *
+ * Returns `null` for non-printable events (function keys, modifiers, etc.)
+ * so callers can skip them.
+ */
+const extractPrintable = (key: {
+	readonly name: string
+	readonly sequence?: string
+	readonly ctrl: boolean
+	readonly meta: boolean
+}): string | null => {
+	if (key.ctrl || key.meta) return null
+	if (key.name.length === 1) return key.name
+	const seq = key.sequence ?? ""
+	// Only accept sequences that are pure printable text. Any escape or
+	// control byte means this was a function / navigation key.
+	if (seq.length > 1 && !/[\x00-\x1f\x7f]/.test(seq)) return seq
+	return null
+}
 
 interface KeyboardNavParams {
 	selectedTrace: TraceItem | null
@@ -85,6 +112,44 @@ export const useKeyboardNav = (params: KeyboardNavParams) => {
 
 	const spanNavActive = detailView !== "service-logs" && selectedSpanIndex !== null
 	const serviceLogNavActive = detailView === "service-logs"
+
+	// Bracketed paste: when the terminal has bracketed paste enabled, opentui
+	// surfaces the full pasted text as a single "paste" event on keyInput.
+	// Route it into whichever input is currently open. We also enable the
+	// mode ourselves (`\x1b[?2004h`) in case the host terminal didn't — it's
+	// a no-op on terminals that already had it on.
+	useEffect(() => {
+		const keyInput = (renderer as unknown as { keyInput?: { on: (event: string, handler: (e: unknown) => void) => void; off: (event: string, handler: (e: unknown) => void) => void } }).keyInput
+		if (!keyInput) return
+		try {
+			process.stdout.write("\x1b[?2004h")
+		} catch {
+			// Best effort — some test environments don't have a real TTY.
+		}
+		const handler = (event: unknown) => {
+			const bytes = (event as { bytes?: Uint8Array }).bytes
+			if (!bytes || bytes.length === 0) return
+			const text = Buffer.from(bytes).toString("utf8").replace(/[\x00-\x1f\x7f]+/g, (match) => match === "\n" ? " " : "")
+			if (!text) return
+			const s = stateRef.current
+			if (s.pickerMode !== "off") {
+				setPickerInput((current) => current + text)
+				setPickerIndex(0)
+				return
+			}
+			if (s.filterMode) {
+				setFilterText((current) => current + text)
+				return
+			}
+		}
+		keyInput.on("paste", handler)
+		return () => {
+			keyInput.off("paste", handler)
+			try {
+				process.stdout.write("\x1b[?2004l")
+			} catch {}
+		}
+	}, [renderer, setFilterText, setPickerInput, setPickerIndex])
 
 	const stateRef = useRef({ traceState, serviceLogState, selectedServiceLogIndex, selectedTheme, selectedTraceIndex, selectedSpanIndex, selectedTraceService, detailView, showHelp, collapsedSpanIds, spanNavActive, serviceLogNavActive, filterMode, filterText, autoRefresh, traceSort, pickerMode, pickerInput, pickerIndex, attrFacets, activeAttrKey, activeAttrValue, ...params })
 	// Keep the keyboard handler's state mirror in sync before the next paint.
@@ -323,8 +388,14 @@ export const useKeyboardNav = (params: KeyboardNavParams) => {
 				}
 				return
 			}
-			if (key.name.length === 1 && !key.ctrl && !key.meta) {
-				setPickerInput(s.pickerInput + key.name)
+			// Prefer key.sequence over key.name so multi-char paste events that
+			// slip through as a single raw sequence still get inserted in full.
+			const printable = extractPrintable(key)
+			if (printable) {
+				// Functional setState — multiple key events in the same tick would
+				// otherwise all read a stale stateRef.current.pickerInput and
+				// clobber each other, losing all but the last char of a paste.
+				setPickerInput((current) => current + printable)
 				setPickerIndex(0)
 				return
 			}
@@ -343,12 +414,14 @@ export const useKeyboardNav = (params: KeyboardNavParams) => {
 				return
 			}
 			if (key.name === "backspace") {
-				setFilterText(s.filterText.slice(0, -1))
+				setFilterText((current) => current.slice(0, -1))
 				return
 			}
-			// Single printable character
-			if (key.name.length === 1 && !key.ctrl && !key.meta) {
-				setFilterText(s.filterText + key.name)
+			const printable = extractPrintable(key)
+			if (printable) {
+				// Functional setState so rapid keystrokes / pastes don't clobber
+				// each other via a stale stateRef.current.filterText closure.
+				setFilterText((current) => current + printable)
 				return
 			}
 			return
