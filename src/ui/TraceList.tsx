@@ -50,6 +50,21 @@ const TraceRow = ({
 	)
 }
 
+export interface TraceListProps {
+	readonly traces: readonly TraceSummaryItem[]
+	readonly selectedTraceId: string | null
+	readonly status: LoadStatus
+	readonly error: string | null
+	readonly contentWidth: number
+	readonly services: readonly string[]
+	readonly selectedService: string | null
+	readonly focused?: boolean
+	readonly filterText?: string
+	readonly sortMode?: string
+	readonly totalCount?: number
+	readonly onSelectTrace: (traceId: string) => void
+}
+
 export const TraceList = ({
 	showHeader,
 	traces,
@@ -64,21 +79,7 @@ export const TraceList = ({
 	sortMode,
 	totalCount,
 	onSelectTrace,
-}: {
-	showHeader: boolean
-	traces: readonly TraceSummaryItem[]
-	selectedTraceId: string | null
-	status: LoadStatus
-	error: string | null
-	contentWidth: number
-	services: readonly string[]
-	selectedService: string | null
-	focused?: boolean
-	filterText?: string
-	sortMode?: string
-	totalCount?: number
-	onSelectTrace: (traceId: string) => void
-}) => {
+}: { showHeader: boolean } & TraceListProps) => {
 	if (showHeader) {
 		const countLabel = totalCount !== undefined && totalCount !== traces.length ? `${traces.length}/${totalCount}` : traces.length > 0 ? String(traces.length) : ""
 		const metaLabel = [

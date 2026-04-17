@@ -4,8 +4,10 @@ import { useTerminalDimensions } from "@opentui/react"
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from "react"
 import { config } from "./config.js"
 import type { LogItem, TraceItem } from "./domain.ts"
-import { fitCell, formatShortDate, formatTimestamp, traceRowId } from "./ui/format.ts"
-import { AlignedHeaderLine, BlankRow, Divider, FilterBar, FooterHints, HelpModal, PlainLine, SeparatorColumn, SplitDivider, TextLine } from "./ui/primitives.tsx"
+import { formatShortDate, formatTimestamp, traceRowId } from "./ui/format.ts"
+import { AlignedHeaderLine, BlankRow, Divider, FooterHints, HelpModal, PlainLine, SeparatorColumn, SplitDivider, TextLine } from "./ui/primitives.tsx"
+import { TraceListPane } from "./ui/app/TraceListPane.tsx"
+import { useAppLayout } from "./ui/app/useAppLayout.ts"
 import { ServiceLogsView } from "./ui/ServiceLogs.tsx"
 import {
 	autoRefreshAtom,
@@ -39,7 +41,6 @@ import { SpanDetailPane } from "./ui/SpanDetailPane.tsx"
 import { colors, SEPARATOR } from "./ui/theme.ts"
 import { TraceDetailsPane } from "./ui/TraceDetailsPane.tsx"
 import { getVisibleSpans } from "./ui/Waterfall.tsx"
-import { TraceList } from "./ui/TraceList.tsx"
 import { useKeyboardNav } from "./ui/useKeyboardNav.ts"
 
 export const App = () => {
@@ -62,48 +63,30 @@ export const App = () => {
 	const [filterText] = useAtom(filterTextAtom)
 	const [traceSort] = useAtom(traceSortAtom)
 
-	// Layout calculations
-	const contentWidth = Math.max(60, width ?? 100)
-	// Lazygit-style: side-by-side for anything remotely wide; vertical stack only
-	// when the terminal is truly narrow.
-	const isWideLayout = (width ?? 100) >= 100
-	const splitGap = 1
-	const sectionPadding = 1
-	const traceListHeaderHeight = 1
-	const footerNotice = notice ? fitCell(notice, Math.max(24, Math.max(60, width ?? 100) - 2)) : null
-	const footerHeight = 1
-	const footerFrameHeight = footerHeight > 0 ? 1 + footerHeight : 0
-	const frameHeight = 1 + 1 + footerFrameHeight
-	const availableContentHeight = Math.max(10, (height ?? 24) - frameHeight)
-	// Level 2 (span detail focused) rebalances the split so the waterfall
-	// context on the left has more room to breathe — otherwise the bars and
-	// labels get aggressively truncated in the narrow 40% slice.
-	const viewLevelForLayout: 0 | 1 | 2 =
-		detailView === "span-detail" ? 2 :
-		selectedSpanIndex !== null ? 1 :
-		0
-	const splitRatio = viewLevelForLayout === 2 ? 0.5 : 0.4
-	const leftPaneWidth = isWideLayout ? Math.max(40, Math.floor((contentWidth - splitGap) * splitRatio)) : contentWidth
-	const rightPaneWidth = isWideLayout ? Math.max(28, contentWidth - leftPaneWidth - splitGap) : contentWidth
-
-	const leftContentWidth = isWideLayout ? Math.max(24, leftPaneWidth - 3) : Math.max(24, contentWidth - sectionPadding * 2)
-	const rightContentWidth = isWideLayout ? Math.max(24, rightPaneWidth - sectionPadding * 2) : Math.max(24, contentWidth - sectionPadding * 2)
-	const headerFooterWidth = Math.max(24, contentWidth - 2)
-	const wideBodyHeight = availableContentHeight
-	const wideBodyLines = Math.max(8, wideBodyHeight - 5)
-	// Narrow: each drill-in level gets the full body (minus a 1-line breadcrumb
-	// on L1/L2). At L0 we keep today's stacked list + details layout.
-	const narrowSplitHeight = Math.max(10, availableContentHeight - 1)
-	const narrowListHeight = Math.max(4, Math.min(10, Math.floor(narrowSplitHeight * 0.4), narrowSplitHeight - 9))
-	const narrowDetailHeight = narrowSplitHeight - narrowListHeight
-	const narrowBodyLines = Math.max(2, narrowDetailHeight - 5)
-	const narrowFullBodyLines = Math.max(8, availableContentHeight - 6) // header(1) + breadcrumb(1) + divider(1) + details header(4) + footer divider
-	const wideTraceListBodyHeight = Math.max(1, wideBodyHeight - traceListHeaderHeight)
-	const narrowTraceListBodyHeight = Math.max(1, narrowListHeight - traceListHeaderHeight)
-	const traceViewportRows = isWideLayout ? wideTraceListBodyHeight : narrowTraceListBodyHeight
-	const tracePageSize = Math.max(1, traceViewportRows - 1)
-	const spanViewportRows = Math.max(1, (isWideLayout ? wideBodyLines : narrowBodyLines) - 1)
-	const spanPageSize = Math.max(1, spanViewportRows - 1)
+	const layout = useAppLayout({ width, height, notice, detailView, selectedSpanIndex })
+	const {
+		contentWidth,
+		isWideLayout,
+		sectionPadding,
+		availableContentHeight,
+		viewLevel,
+		footerNotice,
+		footerHeight,
+		leftPaneWidth,
+		rightPaneWidth,
+		leftContentWidth,
+		rightContentWidth,
+		headerFooterWidth,
+		wideBodyHeight,
+		wideBodyLines,
+		narrowListHeight,
+		narrowBodyLines,
+		narrowFullBodyLines,
+		wideTraceListBodyHeight,
+		narrowTraceListBodyHeight,
+		tracePageSize,
+		spanPageSize,
+	} = layout
 
 	// Refs
 	const noticeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -522,7 +505,7 @@ export const App = () => {
 	// Rendered text is "MOTEL" + " · " (3 chars) + <service>
 	const headerLeftLen = "MOTEL".length + 3 + headerServiceLabel.length
 	const headerGap = Math.max(2, headerFooterWidth - headerLeftLen - headerRight.length)
-	const visibleFooterNotice = footerNotice ? fitCell(footerNotice.trimEnd(), headerFooterWidth) : null
+	const visibleFooterNotice = footerNotice
 
 	const selectTraceById = useCallback((traceId: string) => {
 		const index = traceState.data.findIndex((trace) => trace.traceId === traceId)
@@ -554,7 +537,6 @@ export const App = () => {
 	//   level 0: trace list focused
 	//   level 1: span nav (waterfall focused)
 	//   level 2: span detail focused
-	const viewLevel = viewLevelForLayout
 	const filteredSpansApp = selectedTrace ? getVisibleSpans(selectedTrace.spans, collapsedSpanIds) : []
 	const selectedSpan = selectedSpanIndex !== null ? filteredSpansApp[selectedSpanIndex] ?? null : null
 	const selectedSpanLogs = useMemo(
@@ -622,15 +604,18 @@ export const App = () => {
 				 *   L2: [waterfall ctx] | [span-detail focused]
 				 */
 				<box flexGrow={1} flexDirection="row">
-					<box width={leftPaneWidth} height={wideBodyHeight} flexDirection="column" paddingLeft={sectionPadding} paddingRight={sectionPadding}>
+					<box width={leftPaneWidth} height={wideBodyHeight} flexDirection="column">
 						{viewLevel <= 1 ? (
-							<>
-								<TraceList showHeader {...traceListProps} />
-								{filterMode ? <FilterBar text={filterText} width={leftContentWidth} /> : null}
-								<scrollbox ref={traceListScrollRef} height={filterMode ? wideTraceListBodyHeight - 1 : wideTraceListBodyHeight} flexGrow={0}>
-									<TraceList showHeader={false} {...traceListProps} />
-								</scrollbox>
-							</>
+							<TraceListPane
+								traceListProps={traceListProps}
+								filterMode={filterMode}
+								filterText={filterText}
+								filterWidth={leftContentWidth}
+								containerHeight={wideBodyHeight}
+								bodyHeight={wideTraceListBodyHeight}
+								padding={sectionPadding}
+								scrollRef={traceListScrollRef}
+							/>
 						) : (
 							<TraceDetailsPane
 								trace={selectedTrace}
@@ -681,13 +666,16 @@ export const App = () => {
 			) : viewLevel === 0 ? (
 				/* NARROW L0: list on top, trace details below. */
 				<>
-					<box height={narrowListHeight} flexDirection="column" paddingLeft={sectionPadding} paddingRight={sectionPadding}>
-						<TraceList showHeader {...traceListProps} />
-						{filterMode ? <FilterBar text={filterText} width={leftContentWidth} /> : null}
-						<scrollbox ref={traceListScrollRef} height={filterMode ? narrowTraceListBodyHeight - 1 : narrowTraceListBodyHeight} flexGrow={0}>
-							<TraceList showHeader={false} {...traceListProps} />
-						</scrollbox>
-					</box>
+					<TraceListPane
+						traceListProps={traceListProps}
+						filterMode={filterMode}
+						filterText={filterText}
+						filterWidth={leftContentWidth}
+						containerHeight={narrowListHeight}
+						bodyHeight={narrowTraceListBodyHeight}
+						padding={sectionPadding}
+						scrollRef={traceListScrollRef}
+					/>
 					<Divider width={contentWidth} />
 					<TraceDetailsPane
 						trace={selectedTrace}
