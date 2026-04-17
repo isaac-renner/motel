@@ -1,6 +1,6 @@
 {
   "name": "@kitlangton/motel",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "A local OpenTelemetry ingest + TUI viewer for development, backed by SQLite.",
   "type": "module",
   "license": "MIT",
@@ -23,7 +23,9 @@
     "effect",
     "opentui"
   ],
-  "workspaces": ["web"],
+  "workspaces": [
+    "web"
+  ],
   "engines": {
     "bun": ">=1.1.0"
   },
