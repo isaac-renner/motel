@@ -153,6 +153,22 @@ describe("getWaterfallSuffixMetrics", () => {
 		// label + 1 (gap before bar) + bar + 1 (gap before suffix) + suffix = contentWidth
 		expect(labelMaxWidth + 1 + barWidth + 1 + metrics.suffixWidth).toBe(contentWidth)
 	})
+
+	it("layout fits inside contentWidth at narrow widths without overflow", () => {
+		// Regression guard: a prior `max(6, ...)` floor on barWidth caused
+		// the total row width to exceed contentWidth at narrow panes,
+		// which in turn made OpenTUI's truncate add "..." suffixes
+		// across the right edge. Every width in this sweep must satisfy
+		// label + 1 + bar + 1 + suffix == contentWidth.
+		for (let contentWidth = 14; contentWidth <= 120; contentWidth++) {
+			for (const suffixWidth of [3, 5, 7]) {
+				const { labelMaxWidth, barWidth } = getWaterfallLayout(contentWidth, suffixWidth)
+				expect(labelMaxWidth + 1 + barWidth + 1 + suffixWidth).toBe(contentWidth)
+				expect(barWidth).toBeGreaterThanOrEqual(1)
+				expect(labelMaxWidth).toBeGreaterThanOrEqual(4)
+			}
+		}
+	})
 })
 
 // ---------------------------------------------------------------------------

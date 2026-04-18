@@ -181,9 +181,17 @@ const durationColor = (durationMs: number) => {
 }
 
 export const getWaterfallLayout = (contentWidth: number, suffixWidth: number) => {
-	const labelMaxWidth = Math.min(Math.floor(contentWidth * 0.4), 32)
-	// Two single-space gaps: one between label and bar, one between bar and suffix.
-	const barWidth = Math.max(6, contentWidth - labelMaxWidth - suffixWidth - 2)
+	// Reserve the two single-space gaps (label↔bar, bar↔suffix) and the
+	// duration suffix up-front, then split the remaining width between
+	// label (up to 50%, capped at 32) and the bar. Crucially the bar is
+	// only guaranteed ≥1 cell — forcing a min of 6 like we used to would
+	// push the total past contentWidth at narrow widths and OpenTUI's
+	// `<text truncate>` would then append "..." as an overflow suffix.
+	// Better to let the bar shrink than to smear ellipses across rows.
+	const gapsAndSuffix = suffixWidth + 2
+	const remaining = Math.max(4, contentWidth - gapsAndSuffix)
+	const labelMaxWidth = Math.max(4, Math.min(Math.floor(remaining * 0.5), 32))
+	const barWidth = Math.max(1, contentWidth - labelMaxWidth - gapsAndSuffix)
 	return { labelMaxWidth, barWidth } as const
 }
 
@@ -281,8 +289,19 @@ const WaterfallRow = memo(({
 
 	const { labelMaxWidth, barWidth } = getWaterfallLayout(contentWidth, suffixMetrics.suffixWidth)
 
-	const opMaxWidth = Math.max(4, labelMaxWidth - prefix.length - 2)
-	const opTruncated = opName.length > opMaxWidth ? `${opName.slice(0, opMaxWidth - 1)}\u2026` : opName
+	// Op name budget = labelMaxWidth minus (prefix + indicator + 1 space).
+	// Never force a minimum: at very deep nesting or narrow widths the
+	// prefix + indicator may already fill the label column, in which
+	// case we render the op as an empty string (or a lone ellipsis) so
+	// the line stays within contentWidth. Previous code forced op to 4
+	// chars which could push total row width past the pane and make
+	// OpenTUI smear "..." across the right edge.
+	const opMaxWidth = Math.max(0, labelMaxWidth - prefix.length - 2)
+	const opTruncated = opMaxWidth === 0
+		? ""
+		: opName.length > opMaxWidth
+			? `${opName.slice(0, Math.max(0, opMaxWidth - 1))}\u2026`
+			: opName
 	const labelLen = prefix.length + 2 + opTruncated.length
 	const labelPad = " ".repeat(Math.max(0, labelMaxWidth - labelLen))
 
