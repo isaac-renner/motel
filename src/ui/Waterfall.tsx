@@ -1,5 +1,5 @@
 import { memo, useLayoutEffect, useRef, useState } from "react"
-import type { LogItem, TraceItem, TraceSpanItem } from "../domain.ts"
+import { isAiSpan, type LogItem, type TraceItem, type TraceSpanItem } from "../domain.ts"
 import { formatDuration, lifecycleLabel, splitDuration, truncateText } from "./format.ts"
 import { BlankRow, TextLine } from "./primitives.tsx"
 import { colors, waterfallColors } from "./theme.ts"
@@ -267,8 +267,16 @@ const WaterfallRow = memo(({
 	onSelect: () => void
 }) => {
 	const prefix = buildTreePrefix(spans, index)
-	// Match the trace list indicator: `!` on error, chevron on collapsible parents, `·` on leaves.
-	const indicator = span.status === "error" ? "!" : hasChildSpans ? (collapsed ? "\u25b8" : "\u25be") : "\u00b7"
+	const isAi = isAiSpan(span.tags)
+	// Indicator column: `!` on error, chevron on collapsible parents,
+	// `✦` on AI leaves (LLM payloads detected — enter drills into a
+	// specialized chat view), `·` on other leaves. AI parents keep the
+	// chevron glyph so tree structure stays readable; the accent color
+	// (applied below) carries the "AI content lives here" signal.
+	const indicator = span.status === "error" ? "!"
+		: hasChildSpans ? (collapsed ? "\u25b8" : "\u25be")
+		: isAi ? "\u2726"
+		: "\u00b7"
 	const opName = span.isRunning ? `${span.operationName} [${lifecycleLabel(span)}]` : span.operationName
 
 	const { labelMaxWidth, barWidth } = getWaterfallLayout(contentWidth, suffixMetrics.suffixWidth)
@@ -292,6 +300,11 @@ const WaterfallRow = memo(({
 	const indicatorColor = selected ? colors.selectedText
 		: dimmed ? colors.separator
 		: isError ? colors.error
+		// AI accent outranks parent/leaf color so both AI parents and AI
+		// leaves scan as "there's an LLM payload here" from across the
+		// waterfall. Error still wins because a failed AI span is first
+		// and foremost a failure.
+		: isAi ? colors.accent
 		: hasChildSpans ? colors.muted
 		: colors.passing
 	const opColor = selected ? colors.selectedText

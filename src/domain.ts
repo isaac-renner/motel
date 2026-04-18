@@ -195,6 +195,22 @@ export const AI_FTS_KEYS = [
  */
 export const AI_TEXT_SEARCH_KEYS = AI_FTS_KEYS
 
+/**
+ * True if a span's tags contain any of the AI content keys we track.
+ * Used as the single source of truth for "this span has LLM payloads
+ * worth a specialized view" — drives the ✦ marker in the waterfall row
+ * and picks the chat-flavored renderer when the user drills into the
+ * span's detail. Scanning happens once per row during render so this
+ * needs to stay O(AI_FTS_KEYS.length) with cheap `in` checks rather
+ * than an `Object.keys(...).some(...)` allocation.
+ */
+export const isAiSpan = (tags: Readonly<Record<string, string>>): boolean => {
+	for (const key of AI_FTS_KEYS) {
+		if (key in tags) return true
+	}
+	return false
+}
+
 const PREVIEW_LENGTH = 200
 
 export const truncatePreview = (value: string | null | undefined): string | null => {
