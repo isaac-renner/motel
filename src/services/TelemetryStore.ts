@@ -7,6 +7,9 @@ import type { AiCallDetail, AiCallSummary, FacetItem, LogItem, SpanItem, StatsIt
 import { AI_ATTR_MAP, AI_FTS_KEYS, AI_TEXT_SEARCH_KEYS, truncatePreview } from "../domain.js"
 import { attributeMap, nanosToMilliseconds, parseAnyValue, spanKindLabel, spanStatusLabel, stringifyValue, type OtlpLogExportRequest, type OtlpTraceExportRequest } from "../otlp.js"
 
+const isSqliteLockError = (error: unknown) =>
+	error instanceof Error && /(database is locked|database table is locked|SQLITE_BUSY)/i.test(error.message)
+
 interface SpanRow {
 	readonly trace_id: string
 	readonly span_id: string
@@ -502,108 +505,110 @@ export const makeTelemetryStoreLayer = (opts: TelemetryStoreOptions) => Layer.ef
 				PRAGMA mmap_size = 268435456;
 			`)
 		} else {
-		db.exec(`
-			PRAGMA journal_mode = WAL;
-			PRAGMA synchronous = NORMAL;
-			PRAGMA temp_store = MEMORY;
-			-- Longer busy timeout: the ingest worker holds the write lock
-			-- for up to a few seconds during big OTLP batches, and the main
-			-- daemon's retention passes can do the same. 15s gives either
-			-- side enough slack to serialise instead of erroring.
-			PRAGMA busy_timeout = 15000;
-			-- WAL checkpoint automatically when it grows past ~16MB. Without
-			-- this the WAL happily runs into the hundreds of MB and queries
-			-- start paying the cost of walking the WAL on every read.
-			PRAGMA wal_autocheckpoint = 4000;
-			-- Bump cache above the 2MB default. 64MB fits most hot index pages
-			-- (trace_summaries, spans, span_attributes indexes) in RAM even on
-			-- multi-GB databases, cutting cold-read latency meaningfully on
-			-- picker / search queries that sweep the index.
-			PRAGMA cache_size = -65536;
-			-- Let SQLite memory-map the first 256MB of the file. This is a
-			-- cheap way to avoid read() syscalls on hot pages and lets the OS
-			-- page cache serve index lookups directly. Safe on macOS and Linux;
-			-- SQLite silently caps at actual file size for smaller DBs.
-			PRAGMA mmap_size = 268435456;
+			db.exec(`
+				-- Bump cache above the 2MB default. 64MB fits most hot index pages
+				-- (trace_summaries, spans, span_attributes indexes) in RAM even on
+				-- multi-GB databases, cutting cold-read latency meaningfully on
+				-- picker / search queries that sweep the index.
+				PRAGMA cache_size = -65536;
+				-- Let SQLite memory-map the first 256MB of the file. This is a
+				-- cheap way to avoid read() syscalls on hot pages and lets the OS
+				-- page cache serve index lookups directly. Safe on macOS and Linux;
+				-- SQLite silently caps at actual file size for smaller DBs.
+				PRAGMA mmap_size = 268435456;
+			`)
+			try {
+				db.exec(`
+					PRAGMA journal_mode = WAL;
+					PRAGMA synchronous = NORMAL;
+					PRAGMA temp_store = MEMORY;
+					-- WAL checkpoint automatically when it grows past ~16MB. Without
+					-- this the WAL happily runs into the hundreds of MB and queries
+					-- start paying the cost of walking the WAL on every read.
+					PRAGMA wal_autocheckpoint = 4000;
 
-			CREATE TABLE IF NOT EXISTS spans (
-				trace_id TEXT NOT NULL,
-				span_id TEXT NOT NULL,
-				parent_span_id TEXT,
-				service_name TEXT NOT NULL,
-				scope_name TEXT,
-				operation_name TEXT NOT NULL,
-				kind TEXT,
-				start_time_ms INTEGER NOT NULL,
-				end_time_ms INTEGER NOT NULL,
-				duration_ms REAL NOT NULL,
-				status TEXT NOT NULL,
-				attributes_json TEXT NOT NULL,
-				resource_json TEXT NOT NULL,
-				events_json TEXT NOT NULL,
-				PRIMARY KEY (trace_id, span_id)
-			);
+					CREATE TABLE IF NOT EXISTS spans (
+						trace_id TEXT NOT NULL,
+						span_id TEXT NOT NULL,
+						parent_span_id TEXT,
+						service_name TEXT NOT NULL,
+						scope_name TEXT,
+						operation_name TEXT NOT NULL,
+						kind TEXT,
+						start_time_ms INTEGER NOT NULL,
+						end_time_ms INTEGER NOT NULL,
+						duration_ms REAL NOT NULL,
+						status TEXT NOT NULL,
+						attributes_json TEXT NOT NULL,
+						resource_json TEXT NOT NULL,
+						events_json TEXT NOT NULL,
+						PRIMARY KEY (trace_id, span_id)
+					);
 
-			CREATE INDEX IF NOT EXISTS idx_spans_service_time ON spans(service_name, start_time_ms DESC);
-			CREATE INDEX IF NOT EXISTS idx_spans_trace_time ON spans(trace_id, start_time_ms ASC);
-			CREATE INDEX IF NOT EXISTS idx_spans_span_id ON spans(span_id);
-			CREATE INDEX IF NOT EXISTS idx_spans_status_time ON spans(status, start_time_ms DESC);
+					CREATE INDEX IF NOT EXISTS idx_spans_service_time ON spans(service_name, start_time_ms DESC);
+					CREATE INDEX IF NOT EXISTS idx_spans_trace_time ON spans(trace_id, start_time_ms ASC);
+					CREATE INDEX IF NOT EXISTS idx_spans_span_id ON spans(span_id);
+					CREATE INDEX IF NOT EXISTS idx_spans_status_time ON spans(status, start_time_ms DESC);
 
-			CREATE TABLE IF NOT EXISTS logs (
-				id INTEGER PRIMARY KEY AUTOINCREMENT,
-				trace_id TEXT,
-				span_id TEXT,
-				service_name TEXT NOT NULL,
-				scope_name TEXT,
-				severity_text TEXT NOT NULL,
-				timestamp_ms INTEGER NOT NULL,
-				body TEXT NOT NULL,
-				attributes_json TEXT NOT NULL,
-				resource_json TEXT NOT NULL
-			);
+					CREATE TABLE IF NOT EXISTS logs (
+						id INTEGER PRIMARY KEY AUTOINCREMENT,
+						trace_id TEXT,
+						span_id TEXT,
+						service_name TEXT NOT NULL,
+						scope_name TEXT,
+						severity_text TEXT NOT NULL,
+						timestamp_ms INTEGER NOT NULL,
+						body TEXT NOT NULL,
+						attributes_json TEXT NOT NULL,
+						resource_json TEXT NOT NULL
+					);
 
-			CREATE INDEX IF NOT EXISTS idx_logs_service_time ON logs(service_name, timestamp_ms DESC);
-			CREATE INDEX IF NOT EXISTS idx_logs_trace_time ON logs(trace_id, timestamp_ms DESC);
-			CREATE INDEX IF NOT EXISTS idx_logs_span_time ON logs(span_id, timestamp_ms DESC);
-			CREATE INDEX IF NOT EXISTS idx_logs_severity_time ON logs(severity_text, timestamp_ms DESC);
+					CREATE INDEX IF NOT EXISTS idx_logs_service_time ON logs(service_name, timestamp_ms DESC);
+					CREATE INDEX IF NOT EXISTS idx_logs_trace_time ON logs(trace_id, timestamp_ms DESC);
+					CREATE INDEX IF NOT EXISTS idx_logs_span_time ON logs(span_id, timestamp_ms DESC);
+					CREATE INDEX IF NOT EXISTS idx_logs_severity_time ON logs(severity_text, timestamp_ms DESC);
 
-			CREATE TABLE IF NOT EXISTS trace_summaries (
-				trace_id TEXT PRIMARY KEY,
-				service_name TEXT NOT NULL,
-				root_operation_name TEXT NOT NULL,
-				started_at_ms INTEGER NOT NULL,
-				ended_at_ms INTEGER NOT NULL,
-				active_span_count INTEGER NOT NULL DEFAULT 0,
-				duration_ms REAL NOT NULL,
-				span_count INTEGER NOT NULL,
-				error_count INTEGER NOT NULL
-			);
+					CREATE TABLE IF NOT EXISTS trace_summaries (
+						trace_id TEXT PRIMARY KEY,
+						service_name TEXT NOT NULL,
+						root_operation_name TEXT NOT NULL,
+						started_at_ms INTEGER NOT NULL,
+						ended_at_ms INTEGER NOT NULL,
+						active_span_count INTEGER NOT NULL DEFAULT 0,
+						duration_ms REAL NOT NULL,
+						span_count INTEGER NOT NULL,
+						error_count INTEGER NOT NULL
+					);
 
-			CREATE INDEX IF NOT EXISTS idx_trace_summaries_started_at ON trace_summaries(started_at_ms DESC, trace_id DESC);
-			CREATE INDEX IF NOT EXISTS idx_trace_summaries_service_started_at ON trace_summaries(service_name, started_at_ms DESC, trace_id DESC);
-			CREATE INDEX IF NOT EXISTS idx_trace_summaries_duration ON trace_summaries(duration_ms DESC);
+					CREATE INDEX IF NOT EXISTS idx_trace_summaries_started_at ON trace_summaries(started_at_ms DESC, trace_id DESC);
+					CREATE INDEX IF NOT EXISTS idx_trace_summaries_service_started_at ON trace_summaries(service_name, started_at_ms DESC, trace_id DESC);
+					CREATE INDEX IF NOT EXISTS idx_trace_summaries_duration ON trace_summaries(duration_ms DESC);
 
-			CREATE TABLE IF NOT EXISTS span_attributes (
-				trace_id TEXT NOT NULL,
-				span_id TEXT NOT NULL,
-				key TEXT NOT NULL,
-				value TEXT NOT NULL,
-				PRIMARY KEY (trace_id, span_id, key)
-			);
+					CREATE TABLE IF NOT EXISTS span_attributes (
+						trace_id TEXT NOT NULL,
+						span_id TEXT NOT NULL,
+						key TEXT NOT NULL,
+						value TEXT NOT NULL,
+						PRIMARY KEY (trace_id, span_id, key)
+					);
 
-			CREATE INDEX IF NOT EXISTS idx_span_attributes_key_value ON span_attributes(key, value, trace_id, span_id);
-			CREATE INDEX IF NOT EXISTS idx_span_attributes_trace_span ON span_attributes(trace_id, span_id);
+					CREATE INDEX IF NOT EXISTS idx_span_attributes_key_value ON span_attributes(key, value, trace_id, span_id);
+					CREATE INDEX IF NOT EXISTS idx_span_attributes_trace_span ON span_attributes(trace_id, span_id);
 
-			CREATE TABLE IF NOT EXISTS log_attributes (
-				log_id INTEGER NOT NULL,
-				key TEXT NOT NULL,
-				value TEXT NOT NULL,
-				PRIMARY KEY (log_id, key)
-			);
+					CREATE TABLE IF NOT EXISTS log_attributes (
+						log_id INTEGER NOT NULL,
+						key TEXT NOT NULL,
+						value TEXT NOT NULL,
+						PRIMARY KEY (log_id, key)
+					);
 
-			CREATE INDEX IF NOT EXISTS idx_log_attributes_key_value ON log_attributes(key, value, log_id);
-			CREATE INDEX IF NOT EXISTS idx_log_attributes_log_id ON log_attributes(log_id);
-		`)
+					CREATE INDEX IF NOT EXISTS idx_log_attributes_key_value ON log_attributes(key, value, log_id);
+					CREATE INDEX IF NOT EXISTS idx_log_attributes_log_id ON log_attributes(log_id);
+				`)
+			} catch (err) {
+				if (!isSqliteLockError(err)) throw err
+				console.warn(`motel: writer bootstrap skipped during startup: ${(err as Error).message}`)
+			}
 		}
 
 		// Tables detected at runtime. For writer connections these flags are
@@ -726,6 +731,12 @@ export const makeTelemetryStoreLayer = (opts: TelemetryStoreOptions) => Layer.ef
 			// ANALYZE / optimize failures are never fatal — queries still work,
 			// they just run with default row estimates.
 		}
+			// Longer busy timeout: the ingest worker holds the write lock for up
+			// to a few seconds during big OTLP batches, and the daemon's retention
+			// passes can do the same. Apply this AFTER startup maintenance so
+			// lock-conflicted bootstrap steps fail fast instead of stalling health
+			// for the full 15s timeout.
+			try { db.exec(`PRAGMA busy_timeout = 15000;`) } catch { /* ignore */ }
 		} // end: if (!opts.readonly) writer init
 
 		const insertSpan = db.query(`
@@ -774,14 +785,15 @@ export const makeTelemetryStoreLayer = (opts: TelemetryStoreOptions) => Layer.ef
 			GROUP BY trace_id
 		`)
 
-		// One-time full rebuild of the trace_summaries table at open so
-		// any drift from interrupted ingests gets reconciled. Writer-only
-		// because the DELETE + INSERT would fail on a readonly connection
-		// (and would fight the daemon's writer for the lock anyway).
-		if (!opts.readonly) {
-			db.query(`DELETE FROM trace_summaries`).run()
-			rebuildTraceSummaries.run()
-		}
+		const reconcileTraceSummaries = Effect.sync(() => {
+			try {
+				db.query(`DELETE FROM trace_summaries`).run()
+				rebuildTraceSummaries.run()
+			} catch (err) {
+				if (!isSqliteLockError(err)) throw err
+				console.warn(`motel: trace summary rebuild skipped during startup: ${(err as Error).message}`)
+			}
+		})
 
 		const deleteSpanAttributes = db.query(`DELETE FROM span_attributes WHERE trace_id = ? AND span_id = ?`)
 		const insertSpanAttribute = db.query(`INSERT INTO span_attributes (trace_id, span_id, key, value) VALUES (?, ?, ?, ?)`)
@@ -887,6 +899,12 @@ export const makeTelemetryStoreLayer = (opts: TelemetryStoreOptions) => Layer.ef
 		// daemon). The ingest worker and TUI skip it to avoid two writers
 		// competing for the write lock with overlapping DELETE passes.
 		if (opts.runRetention) {
+			// Reconcile any summary drift from interrupted ingests, but do it
+			// after the server becomes healthy. Running this synchronously at
+			// open can sit behind another writer's lock for ~15s and make the
+			// daemon look hung even though the port is already bound.
+			yield* Effect.forkScoped(reconcileTraceSummaries)
+
 			// Enable incremental vacuum so retention can reclaim freed
 			// pages over time instead of needing a stop-the-world VACUUM.
 			// Idempotent: repeat calls after the first are no-ops.

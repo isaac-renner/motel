@@ -161,15 +161,16 @@ export const AiChatView = ({
 }) => {
 	const rows = useMemo(() => buildChatListRows(chunks), [chunks])
 	const selectable = useMemo(() => chunkRows(rows), [rows])
+	const chunkById = useMemo(() => new Map(chunks.map((chunk) => [chunk.id, chunk] as const)), [chunks])
+	const selectedOrdinal = useMemo(
+		() => selectedChunkId ? selectable.findIndex((row) => row.chunkId === selectedChunkId) : -1,
+		[selectable, selectedChunkId],
+	)
 	const [scrollOffset, setScrollOffset] = useState(0)
 
-	const selectedChunk = useMemo(
-		() => selectedChunkId ? chunks.find((chunk) => chunk.id === selectedChunkId) ?? null : null,
-		[chunks, selectedChunkId],
-	)
 	const detailChunk = useMemo(
-		() => detailChunkId ? chunks.find((chunk) => chunk.id === detailChunkId) ?? null : null,
-		[chunks, detailChunkId],
+		() => detailChunkId ? chunkById.get(detailChunkId) ?? null : null,
+		[chunkById, detailChunkId],
 	)
 
 	const selectedRowIndex = useMemo(
@@ -211,7 +212,7 @@ export const AiChatView = ({
 	const maxOffset = Math.max(0, rows.length - bodyLines)
 	const offset = clamp(scrollOffset, 0, maxOffset)
 	const visible = rows.slice(offset, offset + bodyLines)
-	const headerRight = `${operation} ${SEPARATOR} ${durationLabel} ${SEPARATOR} ${selectable.length > 0 ? `${Math.max(1, selectable.findIndex((row) => row.chunkId === selectedChunkId) + 1)}/${selectable.length}` : "0/0"}`
+	const headerRight = `${operation} ${SEPARATOR} ${durationLabel} ${SEPARATOR} ${selectable.length > 0 ? `${Math.max(1, selectedOrdinal + 1)}/${selectable.length}` : "0/0"}`
 	const handleListWheel = (event: MouseScrollEvent) => {
 		if (detailChunk) return
 		const delta = scrollDelta(event)
@@ -267,7 +268,7 @@ export const AiChatView = ({
 								</TextLine>
 							)
 						}
-						const chunk = chunks.find((candidate) => candidate.id === row.chunkId) ?? null
+						const chunk = row.chunkId ? chunkById.get(row.chunkId) ?? null : null
 						const isSelected = row.chunkId === selectedChunkId
 						const prefix = rowPrefix(chunk)
 						const meta = row.meta ?? ""

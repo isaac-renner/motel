@@ -1,6 +1,6 @@
 {
   "name": "@kitlangton/motel",
-  "version": "0.2.1",
+  "version": "0.2.4",
   "description": "A local OpenTelemetry ingest + TUI viewer for development, backed by SQLite.",
   "type": "module",
   "license": "MIT",
@@ -65,8 +65,8 @@
     "search-spans": "bun run src/cli.ts search-spans",
     "trace-stats": "bun run src/cli.ts trace-stats",
     "log-stats": "bun run src/cli.ts log-stats",
-    "web:dev": "cd web && npx vite",
-    "web:build": "cd web && npx vite build",
+    "web:dev": "bun run --cwd web dev",
+    "web:build": "bun run --cwd web build",
     "story:chat": "bun run src/storybook/aiChatStory.tsx",
     "typecheck": "tsc --noEmit",
     "prepublishOnly": "bun run web:build"

@@ -21,7 +21,7 @@ interface SharedTraceDetailsProps {
 	readonly traceSummary: TraceSummaryItem | null
 	readonly traceStatus: TraceDetailState["status"]
 	readonly traceError: string | null
-	readonly traceLogsState: LogState
+	readonly traceLogCount: number
 	readonly selectedSpanIndex: number | null
 	readonly collapsedSpanIds: ReadonlySet<string>
 	readonly waterfallFilterMode: boolean
@@ -33,7 +33,6 @@ interface TraceDetailsSceneProps extends SharedTraceDetailsProps {
 	readonly contentWidth: number
 	readonly bodyLines: number
 	readonly paneWidth: number
-	readonly focused: boolean
 }
 
 const TraceDetailsScene = ({
@@ -41,13 +40,12 @@ const TraceDetailsScene = ({
 	traceSummary,
 	traceStatus,
 	traceError,
-	traceLogsState,
+	traceLogCount,
 	contentWidth,
 	bodyLines,
 	paneWidth,
 	selectedSpanIndex,
 	collapsedSpanIds,
-	focused,
 	waterfallFilterMode,
 	waterfallFilterText,
 	onSelectSpan,
@@ -57,13 +55,12 @@ const TraceDetailsScene = ({
 		traceSummary={traceSummary}
 		traceStatus={traceStatus}
 		traceError={traceError}
-		traceLogsState={traceLogsState}
+		traceLogCount={traceLogCount}
 		contentWidth={contentWidth}
 		bodyLines={bodyLines}
 		paneWidth={paneWidth}
 		selectedSpanIndex={selectedSpanIndex}
 		collapsedSpanIds={collapsedSpanIds}
-		focused={focused}
 		waterfallFilterMode={waterfallFilterMode}
 		waterfallFilterText={waterfallFilterText}
 		onSelectSpan={onSelectSpan}
@@ -292,7 +289,7 @@ export const TraceWorkspace = ({
 		traceSummary: selectedTraceSummary,
 		traceStatus: traceDetailState.status,
 		traceError: traceDetailState.error,
-		traceLogsState: logState,
+		traceLogCount: logState.data.length,
 		selectedSpanIndex,
 		collapsedSpanIds,
 		waterfallFilterMode,
@@ -336,7 +333,6 @@ export const TraceWorkspace = ({
 							contentWidth={rightContentWidth}
 							bodyLines={wideBodyLines}
 							paneWidth={rightPaneWidth}
-							focused={false}
 						/>
 					</box>
 				</box>
@@ -352,7 +348,6 @@ export const TraceWorkspace = ({
 							contentWidth={leftContentWidth}
 							bodyLines={wideBodyLines}
 							paneWidth={leftPaneWidth}
-							focused={true}
 						/>
 					</box>
 					<SeparatorColumn height={wideBodyHeight} junctionChars={separatorCrossChars} />
@@ -412,7 +407,6 @@ export const TraceWorkspace = ({
 					contentWidth={rightContentWidth}
 					bodyLines={narrowBodyLines}
 					paneWidth={contentWidth}
-					focused={false}
 				/>
 			</>
 		)
@@ -432,7 +426,6 @@ export const TraceWorkspace = ({
 					contentWidth={rightContentWidth}
 					bodyLines={narrowFullBodyLines}
 					paneWidth={contentWidth}
-					focused={true}
 				/>
 			) : (
 				<SpanDrillInScene

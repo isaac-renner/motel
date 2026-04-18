@@ -5,7 +5,7 @@ import { AlignedHeaderLine, Divider, FilterBar, PlainLine, TextLine } from "./pr
 import { WaterfallTimeline } from "./Waterfall.tsx"
 import { computeMatchingSpanIds } from "./waterfallFilter.ts"
 import { getVisibleSpans } from "./waterfallModel.ts"
-import type { LoadStatus, LogState } from "./state.ts"
+import type { LoadStatus } from "./state.ts"
 import { colors, SEPARATOR } from "./theme.ts"
 
 /**
@@ -24,13 +24,12 @@ export const TraceDetailsPane = ({
 	traceSummary,
 	traceStatus,
 	traceError,
-	traceLogsState,
+	traceLogCount,
 	contentWidth,
 	bodyLines,
 	paneWidth,
 	selectedSpanIndex,
 	collapsedSpanIds,
-	focused = false,
 	onSelectSpan,
 	waterfallFilterMode,
 	waterfallFilterText,
@@ -39,13 +38,12 @@ export const TraceDetailsPane = ({
 	traceSummary: TraceSummaryItem | null
 	traceStatus: LoadStatus
 	traceError: string | null
-	traceLogsState: LogState
+	traceLogCount: number
 	contentWidth: number
 	bodyLines: number
 	paneWidth: number
 	selectedSpanIndex: number | null
 	collapsedSpanIds: ReadonlySet<string>
-	focused?: boolean
 	onSelectSpan: (index: number) => void
 	waterfallFilterMode: boolean
 	waterfallFilterText: string
@@ -53,20 +51,6 @@ export const TraceDetailsPane = ({
 	const filteredSpans = useMemo(
 		() => trace ? getVisibleSpans(trace.spans, collapsedSpanIds) : [],
 		[trace, collapsedSpanIds],
-	)
-	const selectedSpan = selectedSpanIndex !== null ? filteredSpans[selectedSpanIndex] ?? null : null
-	const traceLogCount = traceLogsState.data.length
-	const spanLogCounts = useMemo(() => {
-		const counts = new Map<string, number>()
-		for (const log of traceLogsState.data) {
-			if (!log.spanId) continue
-			counts.set(log.spanId, (counts.get(log.spanId) ?? 0) + 1)
-		}
-		return counts
-	}, [traceLogsState.data])
-	const selectedSpanLogs = useMemo(
-		() => selectedSpan ? traceLogsState.data.filter((log) => log.spanId === selectedSpan.spanId) : [],
-		[selectedSpan, traceLogsState.data],
 	)
 	const matchingSpanIds = useMemo(
 		() => trace ? computeMatchingSpanIds(trace.spans, waterfallFilterText) : null,
@@ -144,14 +128,12 @@ export const TraceDetailsPane = ({
 						</box>
 					) : null}
 					<box flexDirection="column" paddingLeft={1} paddingRight={1}>
-						<WaterfallTimeline
-							trace={trace}
-							filteredSpans={filteredSpans}
-							spanLogCounts={spanLogCounts}
-							selectedSpanLogs={selectedSpanLogs}
-							contentWidth={contentWidth}
-							bodyLines={waterfallBodyLines}
-							selectedSpanIndex={selectedSpanIndex}
+					<WaterfallTimeline
+						trace={trace}
+						filteredSpans={filteredSpans}
+						contentWidth={contentWidth}
+						bodyLines={waterfallBodyLines}
+						selectedSpanIndex={selectedSpanIndex}
 							collapsedSpanIds={collapsedSpanIds}
 							matchingSpanIds={matchingSpanIds}
 							onSelectSpan={onSelectSpan}

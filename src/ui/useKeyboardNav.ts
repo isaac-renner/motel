@@ -39,7 +39,7 @@ import { filterFacets } from "./AttrFilterModal.tsx"
 import { G_PREFIX_TIMEOUT_MS } from "./theme.ts"
 import { cycleThemeName, themeLabel } from "./theme.ts"
 import { computeMatchingSpanIds, findAdjacentMatch } from "./waterfallFilter.ts"
-import { getVisibleSpans } from "./Waterfall.tsx"
+import { getVisibleSpans } from "./waterfallModel.ts"
 import { resolveCollapseStep } from "./waterfallNav.ts"
 
 /**

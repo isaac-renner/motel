@@ -1,4 +1,4 @@
-import { memo, useLayoutEffect, useRef, useState } from "react"
+import { memo, useLayoutEffect, useState } from "react"
 import { isAiSpan, type LogItem, type TraceItem, type TraceSpanItem } from "../domain.ts"
 import { formatDuration, lifecycleLabel, splitDuration, truncateText } from "./format.ts"
 import { BlankRow, TextLine } from "./primitives.tsx"
@@ -280,8 +280,6 @@ export const SpanPreview = ({
 export const WaterfallTimeline = ({
 	trace,
 	filteredSpans,
-	spanLogCounts,
-	selectedSpanLogs,
 	contentWidth,
 	bodyLines,
 	selectedSpanIndex,
@@ -291,8 +289,6 @@ export const WaterfallTimeline = ({
 }: {
 	trace: TraceItem
 	filteredSpans: readonly TraceSpanItem[]
-	spanLogCounts: ReadonlyMap<string, number>
-	selectedSpanLogs: readonly LogItem[]
 	contentWidth: number
 	bodyLines: number
 	selectedSpanIndex: number | null
@@ -320,13 +316,12 @@ export const WaterfallTimeline = ({
 	const viewportSize = Math.max(1, bodyLines)
 	const maxOffset = Math.max(0, filteredSpans.length - viewportSize)
 	const [scrollOffset, setScrollOffset] = useState(0)
-	const lastTraceIdRef = useRef<string | null>(null)
 
-	// Reset scroll offset when the trace changes.
-	if (trace.traceId !== lastTraceIdRef.current) {
+	// Reset scroll offset when the trace changes. Keep this out of render so
+	// a trace switch doesn't force a render-phase state update on hot paths.
+	useLayoutEffect(() => {
 		setScrollOffset(0)
-		lastTraceIdRef.current = trace.traceId
-	}
+	}, [trace.traceId])
 
 	// Auto-follow selection: only if the selected span would be hidden
 	// by the current window, shift just enough to bring it back. Runs in

@@ -20,10 +20,11 @@
  */
 
 import * as BunWorker from "@effect/platform-bun/BunWorker"
-import { Context, Layer } from "effect"
+import { Context, Effect, Layer, Scope } from "effect"
 import * as RpcClient from "effect/unstable/rpc/RpcClient"
 import type { RpcClientError } from "effect/unstable/rpc/RpcClientError"
 import * as RpcSerialization from "effect/unstable/rpc/RpcSerialization"
+import type { WorkerError } from "effect/unstable/workers/WorkerError"
 import { IngestRpcs } from "./ingestRpc.ts"
 
 // RpcClient.make always surfaces RpcClientError in addition to the
@@ -33,7 +34,7 @@ import { IngestRpcs } from "./ingestRpc.ts"
 // unrelated structural mismatches.
 export class AsyncIngest extends Context.Service<
 	AsyncIngest,
-	RpcClient.FromGroup<typeof IngestRpcs, RpcClientError>
+	RpcClient.FromGroup<typeof IngestRpcs, RpcClientError | WorkerError>
 >()("@motel/AsyncIngest") {}
 
 // Protocol: RpcClient.layerProtocolWorker manages a worker pool and
@@ -48,5 +49,20 @@ const WorkerProtocol = RpcClient.layerProtocolWorker({ size: 1 }).pipe(
 
 export const AsyncIngestLive = Layer.effect(
 	AsyncIngest,
-	RpcClient.make(IngestRpcs),
-).pipe(Layer.provide(WorkerProtocol))
+	Effect.gen(function*() {
+		const scope = yield* Scope.Scope
+		// Keep daemon startup cheap: creating the RPC client here would eagerly
+		// spawn the worker and make /api/health wait on the worker's SQLite
+		// bootstrap. Cache a lazy initializer instead so the worker only starts
+		// on the first ingest request, but is still shared thereafter.
+		const getClient = yield* RpcClient.make(IngestRpcs).pipe(
+			Effect.provide(WorkerProtocol),
+			Effect.cached,
+		)
+		const withScope = <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.provideService(effect, Scope.Scope, scope)
+		return {
+			ingestTraces: (input, options) => Effect.flatMap(withScope(getClient), (client) => client.ingestTraces(input, options)),
+			ingestLogs: (input, options) => Effect.flatMap(withScope(getClient), (client) => client.ingestLogs(input, options)),
+		}
+	}),
+)

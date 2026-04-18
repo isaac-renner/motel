@@ -28,7 +28,7 @@ import { applyTheme, colors, SEPARATOR, themeLabel } from "./ui/theme.ts"
 import { useKeyboardNav } from "./ui/useKeyboardNav.ts"
 import { AttrFilterModal } from "./ui/AttrFilterModal.tsx"
 import { useAttrFilterPicker } from "./ui/useAttrFilterPicker.ts"
-import { getVisibleSpans } from "./ui/Waterfall.tsx"
+import { getVisibleSpans } from "./ui/waterfallModel.ts"
 
 const NOTICE_TIMEOUT_MS = 2500
 

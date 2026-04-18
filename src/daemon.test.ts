@@ -1,3 +1,4 @@
+import { Database } from "bun:sqlite"
 import { afterEach, describe, expect, test } from "bun:test"
 import { Effect } from "effect"
 import * as fs from "node:fs"
@@ -28,6 +29,16 @@ const makeHarness = (): Harness => {
 		port,
 	})
 	return { runtimeDir, port, databasePath, manager }
+}
+
+const withCwd = async <A>(cwd: string, f: () => Promise<A>): Promise<A> => {
+	const previous = process.cwd()
+	process.chdir(cwd)
+	try {
+		return await f()
+	} finally {
+		process.chdir(previous)
+	}
 }
 
 /**
@@ -192,5 +203,64 @@ describe("daemon manager", () => {
 
 		const finalStatus = await Effect.runPromise(harness.manager.getStatus)
 		expect(finalStatus.running).toBe(false)
+	})
+
+	test("becomes healthy even if trace summary rebuild hits a write lock", async () => {
+		const harness = makeHarness()
+		activeHarnesses.push(harness)
+
+		const firstStart = await Effect.runPromise(harness.manager.ensure)
+		expect(firstStart.running).toBe(true)
+		await Effect.runPromise(harness.manager.stop)
+
+		const locker = new Database(harness.databasePath)
+		locker.exec("BEGIN IMMEDIATE")
+		try {
+			const startedAt = performance.now()
+			const restarted = await Effect.runPromise(harness.manager.ensure)
+			const elapsed = performance.now() - startedAt
+			expect(restarted.running).toBe(true)
+			expect(restarted.managed).toBe(true)
+			expect(elapsed).toBeLessThan(10_000)
+		} finally {
+			locker.exec("ROLLBACK")
+			locker.close()
+		}
+	}, 20_000)
+
+	test("starts for the caller cwd even when motel is installed elsewhere", async () => {
+		const projectDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "motel-daemon-project-")))
+		const databasePath = path.join(projectDir, ".motel-data", "telemetry.sqlite")
+		let manager: ReturnType<typeof createDaemonManager> | null = null
+
+		try {
+			await withCwd(projectDir, async () => {
+				manager = createDaemonManager({
+					repoRoot,
+					port: randomPort(),
+				})
+
+				const started = await Effect.runPromise(manager.ensure)
+				expect(started.running).toBe(true)
+				expect(started.managed).toBe(true)
+				expect(started.workdir).toBe(projectDir)
+				expect(started.sameWorkdir).toBe(true)
+				expect(started.databasePath).toBe(databasePath)
+				expect(started.logPath).toBe(path.join(projectDir, ".motel-data", "daemon.log"))
+
+				const reused = await Effect.runPromise(manager.ensure)
+				expect(reused.pid).toBe(started.pid)
+
+				const stopped = await Effect.runPromise(manager.stop)
+				expect(stopped.running).toBe(false)
+			})
+		} finally {
+			await withCwd(projectDir, async () => {
+				if (manager) {
+					await Effect.runPromise(manager.stop).catch(() => undefined)
+				}
+			})
+			fs.rmSync(projectDir, { recursive: true, force: true })
+		}
 	})
 })

@@ -47,7 +47,7 @@ import {
 import { isAiSpan } from "../../domain.ts"
 import { buildChunks, type Chunk } from "../aiChatModel.ts"
 import { parseFilterText } from "../filterParser.ts"
-import { getVisibleSpans } from "../Waterfall.tsx"
+import { getVisibleSpans } from "../waterfallModel.ts"
 
 const clampSelectionIndex = (index: number, length: number) => {
 	if (length === 0) return 0

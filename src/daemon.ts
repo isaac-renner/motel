@@ -2,14 +2,12 @@ import * as fs from "node:fs"
 import { promises as fsp } from "node:fs"
 import * as path from "node:path"
 import { Effect } from "effect"
-import { isAlive, listAliveEntries, MOTEL_SERVICE_ID, type RegistryEntry } from "./registry.js"
+import { isAlive, listAliveEntries, MOTEL_SERVICE_ID, MOTEL_VERSION, type RegistryEntry } from "./registry.js"
 
 const DEFAULT_REPO_ROOT = path.resolve(import.meta.dir, "..")
-const DEFAULT_RUNTIME_DIR = path.join(DEFAULT_REPO_ROOT, ".motel-data")
-const DEFAULT_DATABASE_PATH = path.join(DEFAULT_RUNTIME_DIR, "telemetry.sqlite")
 const DEFAULT_HOST = "127.0.0.1"
 const DEFAULT_PORT = 27686
-const START_TIMEOUT_MS = 15_000
+const START_TIMEOUT_MS = 30_000
 const STOP_TIMEOUT_MS = 10_000
 const LOCK_TIMEOUT_MS = 10_000
 const POLL_INTERVAL_MS = 150
@@ -44,6 +42,8 @@ type LockShape = {
 
 type DaemonConfig = {
 	readonly repoRoot: string
+	readonly serverEntry: string
+	readonly workdir: string
 	readonly runtimeDir: string
 	readonly databasePath: string
 	readonly logPath: string
@@ -79,6 +79,7 @@ export type DaemonManager = {
 
 type DaemonOptions = {
 	readonly repoRoot?: string
+	readonly workdir?: string
 	readonly runtimeDir?: string
 	readonly databasePath?: string
 	readonly host?: string
@@ -96,12 +97,15 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
 const resolveConfig = (options: DaemonOptions = {}): DaemonConfig => {
 	const repoRoot = path.resolve(options.repoRoot ?? DEFAULT_REPO_ROOT)
-	const runtimeDir = path.resolve(options.runtimeDir ?? DEFAULT_RUNTIME_DIR)
+	const workdir = path.resolve(options.workdir ?? process.cwd())
+	const runtimeDir = path.resolve(options.runtimeDir ?? path.join(workdir, ".motel-data"))
 	const databasePath = path.resolve(options.databasePath ?? path.join(runtimeDir, "telemetry.sqlite"))
 	const host = options.host ?? DEFAULT_HOST
 	const port = options.port ?? DEFAULT_PORT
 	return {
 		repoRoot,
+		serverEntry: path.join(repoRoot, "src/server.ts"),
+		workdir,
 		runtimeDir,
 		databasePath,
 		logPath: path.join(runtimeDir, "daemon.log"),
@@ -112,16 +116,14 @@ const resolveConfig = (options: DaemonOptions = {}): DaemonConfig => {
 	}
 }
 
-const cwdMatches = (workdir: string) => {
-	const cwd = process.cwd()
-	const normalizedCwd = cwd.endsWith(path.sep) ? cwd : `${cwd}${path.sep}`
-	const normalizedWorkdir = workdir.endsWith(path.sep) ? workdir : `${workdir}${path.sep}`
-	return normalizedCwd === normalizedWorkdir || normalizedCwd.startsWith(normalizedWorkdir)
+const workdirMatches = (targetWorkdir: string, daemonWorkdir: string) => {
+	const normalizedTarget = targetWorkdir.endsWith(path.sep) ? targetWorkdir : `${targetWorkdir}${path.sep}`
+	const normalizedDaemon = daemonWorkdir.endsWith(path.sep) ? daemonWorkdir : `${daemonWorkdir}${path.sep}`
+	return normalizedTarget === normalizedDaemon || normalizedTarget.startsWith(normalizedDaemon)
 }
 
-const pickByCwd = (entries: readonly RegistryEntry[]) => {
-	const cwd = process.cwd()
-	const withSep = cwd.endsWith(path.sep) ? cwd : `${cwd}${path.sep}`
+const pickByWorkdir = (entries: readonly RegistryEntry[], targetWorkdir: string) => {
+	const withSep = targetWorkdir.endsWith(path.sep) ? targetWorkdir : `${targetWorkdir}${path.sep}`
 	return entries
 		.filter((entry) => {
 			const workdir = entry.workdir.endsWith(path.sep) ? entry.workdir : `${entry.workdir}${path.sep}`
@@ -129,8 +131,6 @@ const pickByCwd = (entries: readonly RegistryEntry[]) => {
 		})
 		.sort((a, b) => b.workdir.length - a.workdir.length)[0] ?? null
 }
-
-const readRegistryEntry = () => pickByCwd(listAliveEntries())
 
 const expectedEnv = (config: DaemonConfig) => ({
 	MOTEL_OTEL_BASE_URL: config.baseUrl,
@@ -145,6 +145,7 @@ const expectedEnv = (config: DaemonConfig) => ({
 export const createDaemonManager = (options: DaemonOptions = {}): DaemonManager => {
 	const config = resolveConfig(options)
 	const mapError = (error: unknown) => new DaemonError(error instanceof Error ? error.message : String(error))
+	const readRegistryEntry = () => pickByWorkdir(listAliveEntries(), config.workdir)
 
 	const fetchHealth = async (timeoutMs: number = HEALTH_FAST_TIMEOUT_MS): Promise<HealthShape | null> => {
 		try {
@@ -156,12 +157,39 @@ export const createDaemonManager = (options: DaemonOptions = {}): DaemonManager 
 		}
 	}
 
+	const startupMarkers = [`Listening on ${config.baseUrl}`, `motel local telemetry server listening on ${config.baseUrl}`]
+
+	const readLogSince = async (offset: number) => {
+		try {
+			const raw = await fsp.readFile(config.logPath, "utf8")
+			return raw.slice(offset)
+		} catch {
+			return ""
+		}
+	}
+
+	const detectStartedFromLog = async (pid: number, offset: number): Promise<HealthShape | null> => {
+		if (!isAlive(pid)) return null
+		const tail = await readLogSince(offset)
+		if (!startupMarkers.some((marker) => tail.includes(marker))) return null
+		return {
+			ok: true,
+			service: MOTEL_SERVICE_ID,
+			databasePath: config.databasePath,
+			pid,
+			url: config.baseUrl,
+			workdir: config.workdir,
+			startedAt: new Date().toISOString(),
+			version: MOTEL_VERSION,
+		}
+	}
+
 	const describeManagedMismatch = (health: HealthShape) => {
 		if (health.service !== MOTEL_SERVICE_ID) {
 			return `Port ${config.port} is in use by ${health.service}, not ${MOTEL_SERVICE_ID}.`
 		}
-		if (!cwdMatches(health.workdir)) {
-			return `Port ${config.port} is serving motel for ${health.workdir}, not ${process.cwd()}.`
+		if (!workdirMatches(config.workdir, health.workdir)) {
+			return `Port ${config.port} is serving motel for ${health.workdir}, not ${config.workdir}.`
 		}
 		if (health.databasePath !== config.databasePath) {
 			return `Port ${config.port} is serving motel with ${health.databasePath}, expected ${config.databasePath}.`
@@ -181,8 +209,8 @@ export const createDaemonManager = (options: DaemonOptions = {}): DaemonManager 
 	 * when absent we skip the DB check rather than refusing to adopt.
 	 */
 	const describeRegistryMismatch = (entry: RegistryEntry): string | null => {
-		if (!cwdMatches(entry.workdir)) {
-			return `Port ${config.port} is serving motel for ${entry.workdir}, not ${process.cwd()}.`
+		if (!workdirMatches(config.workdir, entry.workdir)) {
+			return `Port ${config.port} is serving motel for ${entry.workdir}, not ${config.workdir}.`
 		}
 		if (entry.databasePath && entry.databasePath !== config.databasePath) {
 			return `Port ${config.port} is serving motel with ${entry.databasePath}, expected ${config.databasePath}.`
@@ -217,7 +245,7 @@ export const createDaemonManager = (options: DaemonOptions = {}): DaemonManager 
 			workdir: entry.workdir,
 			startedAt: entry.startedAt,
 			version: entry.version,
-			sameWorkdir: cwdMatches(entry.workdir),
+			sameWorkdir: workdirMatches(config.workdir, entry.workdir),
 			reason: mismatch,
 			logPath: config.logPath,
 			lockPath: config.lockPath,
@@ -276,7 +304,7 @@ export const createDaemonManager = (options: DaemonOptions = {}): DaemonManager 
 		return fs.openSync(config.logPath, "a")
 	}
 
-	const waitForHealthy = async (pid: number) => {
+	const waitForHealthy = async (pid: number, logOffset: number) => {
 		const deadline = Date.now() + START_TIMEOUT_MS
 		while (Date.now() < deadline) {
 			const health = await fetchHealth()
@@ -285,6 +313,8 @@ export const createDaemonManager = (options: DaemonOptions = {}): DaemonManager 
 				if (!mismatch) return health
 				throw new Error(mismatch)
 			}
+			const started = await detectStartedFromLog(pid, logOffset)
+			if (started) return started
 			if (!isAlive(pid)) {
 				// The spawned child is gone. Before declaring failure,
 				// do one patient probe: the child may have died from
@@ -316,7 +346,9 @@ export const createDaemonManager = (options: DaemonOptions = {}): DaemonManager 
 		while (Date.now() < deadline) {
 			if (!isAlive(pid)) return
 			const health = await fetchHealth()
-			if (!health || health.pid !== pid) return
+			if (health && health.pid !== pid) return
+			const registry = readRegistryEntry()
+			if (!health && (!registry || registry.pid !== pid)) return
 			await sleep(POLL_INTERVAL_MS)
 		}
 
@@ -352,7 +384,7 @@ export const createDaemonManager = (options: DaemonOptions = {}): DaemonManager 
 				workdir: registry?.workdir ?? null,
 				startedAt: registry?.startedAt ?? null,
 				version: registry?.version ?? null,
-				sameWorkdir: registry ? cwdMatches(registry.workdir) : false,
+				sameWorkdir: registry ? workdirMatches(config.workdir, registry.workdir) : false,
 				reason: registry ? "Registry entry exists but daemon is not healthy." : null,
 				logPath: config.logPath,
 				lockPath: config.lockPath,
@@ -371,7 +403,7 @@ export const createDaemonManager = (options: DaemonOptions = {}): DaemonManager 
 			workdir: health.workdir,
 			startedAt: health.startedAt,
 			version: health.version,
-			sameWorkdir: cwdMatches(health.workdir),
+			sameWorkdir: workdirMatches(config.workdir, health.workdir),
 			reason: mismatch,
 			logPath: config.logPath,
 			lockPath: config.lockPath,
@@ -404,10 +436,11 @@ export const createDaemonManager = (options: DaemonOptions = {}): DaemonManager 
 			}
 
 			const logFd = await openLogFile()
+			const logOffset = fs.fstatSync(logFd).size
 			try {
 				const proc = Bun.spawn({
-					cmd: [process.execPath, "run", "src/server.ts"],
-					cwd: config.repoRoot,
+					cmd: [process.execPath, "run", config.serverEntry],
+					cwd: config.workdir,
 					detached: true,
 					env: {
 						...process.env,
@@ -425,7 +458,7 @@ export const createDaemonManager = (options: DaemonOptions = {}): DaemonManager 
 				throw new Error("Daemon failed to spawn.")
 			}
 
-			const health = await waitForHealthy(spawnedPid)
+			const health = await waitForHealthy(spawnedPid, logOffset)
 			return {
 				running: true,
 				managed: true,
@@ -436,7 +469,7 @@ export const createDaemonManager = (options: DaemonOptions = {}): DaemonManager 
 				workdir: health.workdir,
 				startedAt: health.startedAt,
 				version: health.version,
-				sameWorkdir: cwdMatches(health.workdir),
+				sameWorkdir: workdirMatches(config.workdir, health.workdir),
 				reason: null,
 				logPath: config.logPath,
 				lockPath: config.lockPath,
@@ -495,9 +528,7 @@ export const createDaemonManager = (options: DaemonOptions = {}): DaemonManager 
 	}
 }
 
-const defaultManager = createDaemonManager()
-
-export const applyManagedDaemonEnv = defaultManager.applyEnv
-export const getManagedDaemonStatus = defaultManager.getStatus
-export const ensureManagedDaemon = defaultManager.ensure
-export const stopManagedDaemon = defaultManager.stop
+export const applyManagedDaemonEnv = Effect.suspend(() => createDaemonManager().applyEnv)
+export const getManagedDaemonStatus = Effect.suspend(() => createDaemonManager().getStatus)
+export const ensureManagedDaemon = Effect.suspend(() => createDaemonManager().ensure)
+export const stopManagedDaemon = Effect.suspend(() => createDaemonManager().stop)

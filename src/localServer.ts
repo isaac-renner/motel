@@ -9,7 +9,7 @@ import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse"
 import * as HttpStaticServer from "effect/unstable/http/HttpStaticServer"
 import * as BunHttpServer from "@effect/platform-bun/BunHttpServer"
 import { MotelHttpApi } from "./httpApi.js"
-import { attributeFiltersFromEntries, attributeContainsFiltersFromEntries, ATTRIBUTE_FILTER_PREFIX, ATTRIBUTE_CONTAINS_PREFIX } from "./queryFilters.js"
+import { attributeFiltersFromEntries, attributeContainsFiltersFromEntries } from "./queryFilters.js"
 import { MOTEL_SERVICE_ID, MOTEL_VERSION, removeRegistryEntry, writeRegistryEntry } from "./registry.js"
 import { AsyncIngest, AsyncIngestLive } from "./services/AsyncIngest.js"
 import { TelemetryStore, TelemetryStoreLive } from "./services/TelemetryStore.js"
@@ -72,14 +72,10 @@ const parseLookbackMinutes = (value: string | null, fallback: number) => {
 const parseBoundedLookbackMinutes = (value: string | null, fallback: number, max: number) => clamp(parseLookbackMinutes(value, fallback), 1, max)
 
 const attributeFiltersFromQuery = (url: URL) =>
-	attributeFiltersFromEntries(
-		[...url.searchParams.entries()].filter(([key]) => key.startsWith(ATTRIBUTE_FILTER_PREFIX) && !key.startsWith(ATTRIBUTE_CONTAINS_PREFIX)),
-	)
+	attributeFiltersFromEntries(url.searchParams.entries())
 
 const attributeContainsFiltersFromQuery = (url: URL) =>
-	attributeContainsFiltersFromEntries(
-		[...url.searchParams.entries()].filter(([key]) => key.startsWith(ATTRIBUTE_CONTAINS_PREFIX)),
-	)
+	attributeContainsFiltersFromEntries(url.searchParams.entries())
 
 type CursorShape =
 	| { readonly kind: "trace"; readonly startedAt: number; readonly id: string }
