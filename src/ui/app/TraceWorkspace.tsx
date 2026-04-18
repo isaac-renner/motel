@@ -1,10 +1,11 @@
-import type { LogItem, TraceItem, TraceSummaryItem } from "../../domain.ts"
+import { isAiSpan, type LogItem, type TraceItem, type TraceSummaryItem } from "../../domain.ts"
+import { AiChatView } from "../AiChatView.tsx"
 import { formatShortDate, formatTimestamp } from "../format.ts"
 import { AlignedHeaderLine, BlankRow, Divider, SeparatorColumn, TextLine } from "../primitives.tsx"
 import { ServiceLogsView } from "../ServiceLogs.tsx"
 import { SpanContentView } from "../SpanContentView.tsx"
 import { SpanDetailPane } from "../SpanDetailPane.tsx"
-import type { DetailView, LogState, ServiceLogState, TraceDetailState } from "../state.ts"
+import type { AiCallDetailState, DetailView, LogState, ServiceLogState, TraceDetailState } from "../state.ts"
 import { colors, SEPARATOR } from "../theme.ts"
 import { TraceDetailsPane } from "../TraceDetailsPane.tsx"
 import type { TraceListProps } from "../TraceList.tsx"
@@ -13,6 +14,170 @@ import type { AppLayout } from "./useAppLayout.ts"
 
 const separatorJunctionChars = new Map<number, string>([[3, "├"]])
 const separatorCrossChars = new Map<number, string>([[3, "┼"]])
+
+interface SharedTraceDetailsProps {
+	readonly trace: TraceItem | null
+	readonly traceSummary: TraceSummaryItem | null
+	readonly traceStatus: TraceDetailState["status"]
+	readonly traceError: string | null
+	readonly traceLogsState: LogState
+	readonly selectedSpanIndex: number | null
+	readonly collapsedSpanIds: ReadonlySet<string>
+	readonly waterfallFilterMode: boolean
+	readonly waterfallFilterText: string
+	readonly onSelectSpan: (index: number) => void
+}
+
+interface TraceDetailsSceneProps extends SharedTraceDetailsProps {
+	readonly contentWidth: number
+	readonly bodyLines: number
+	readonly paneWidth: number
+	readonly focused: boolean
+}
+
+const TraceDetailsScene = ({
+	trace,
+	traceSummary,
+	traceStatus,
+	traceError,
+	traceLogsState,
+	contentWidth,
+	bodyLines,
+	paneWidth,
+	selectedSpanIndex,
+	collapsedSpanIds,
+	focused,
+	waterfallFilterMode,
+	waterfallFilterText,
+	onSelectSpan,
+}: TraceDetailsSceneProps) => (
+	<TraceDetailsPane
+		trace={trace}
+		traceSummary={traceSummary}
+		traceStatus={traceStatus}
+		traceError={traceError}
+		traceLogsState={traceLogsState}
+		contentWidth={contentWidth}
+		bodyLines={bodyLines}
+		paneWidth={paneWidth}
+		selectedSpanIndex={selectedSpanIndex}
+		collapsedSpanIds={collapsedSpanIds}
+		focused={focused}
+		waterfallFilterMode={waterfallFilterMode}
+		waterfallFilterText={waterfallFilterText}
+		onSelectSpan={onSelectSpan}
+	/>
+)
+
+interface SpanDrillInSceneProps {
+	readonly aiDrillIn: boolean
+	readonly selectedSpan: TraceItem["spans"][number] | null
+	readonly aiCallDetailState: AiCallDetailState
+	readonly chatScrollOffset: number
+	readonly contentWidth: number
+	readonly bodyLines: number
+	readonly paneWidth: number
+	readonly selectedAttrIndex: number
+}
+
+const SpanDrillInScene = ({
+	aiDrillIn,
+	selectedSpan,
+	aiCallDetailState,
+	chatScrollOffset,
+	contentWidth,
+	bodyLines,
+	paneWidth,
+	selectedAttrIndex,
+}: SpanDrillInSceneProps) => aiDrillIn ? (
+	<AiChatView
+		span={selectedSpan}
+		detailState={aiCallDetailState}
+		scrollOffset={chatScrollOffset}
+		contentWidth={contentWidth}
+		bodyLines={bodyLines}
+		paneWidth={paneWidth}
+	/>
+) : (
+	<SpanContentView
+		span={selectedSpan}
+		contentWidth={contentWidth}
+		bodyLines={bodyLines}
+		paneWidth={paneWidth}
+		selectedAttrIndex={selectedAttrIndex}
+	/>
+)
+
+interface ServiceLogsSceneProps {
+	readonly selectedTraceService: string | null
+	readonly serviceLogState: ServiceLogState
+	readonly selectedServiceLogIndex: number
+	readonly setSelectedServiceLogIndex: (value: number | ((current: number) => number)) => void
+	readonly headerFooterWidth: number
+	readonly availableContentHeight: number
+}
+
+const ServiceLogsScene = ({
+	selectedTraceService,
+	serviceLogState,
+	selectedServiceLogIndex,
+	setSelectedServiceLogIndex,
+	headerFooterWidth,
+	availableContentHeight,
+}: ServiceLogsSceneProps) => (
+	<box flexGrow={1} flexDirection="column" paddingLeft={1} paddingRight={1}>
+		<AlignedHeaderLine
+			left="SERVICE LOGS"
+			right={`${serviceLogState.data.length} logs${serviceLogState.fetchedAt ? `${SEPARATOR}${formatShortDate(serviceLogState.fetchedAt)} ${formatTimestamp(serviceLogState.fetchedAt)}` : ""}`}
+			width={headerFooterWidth}
+			rightFg={colors.count}
+		/>
+		<TextLine>
+			<span fg={colors.defaultService}>{selectedTraceService ?? "unknown"}</span>
+			<span fg={colors.separator}>{SEPARATOR}</span>
+			<span fg={colors.count}>recent logs</span>
+		</TextLine>
+		<BlankRow />
+		<ServiceLogsView
+			serviceName={selectedTraceService}
+			logsState={serviceLogState}
+			selectedIndex={selectedServiceLogIndex}
+			onSelectLog={setSelectedServiceLogIndex}
+			contentWidth={headerFooterWidth}
+			bodyLines={Math.max(8, availableContentHeight - 3)}
+		/>
+	</box>
+)
+
+interface NarrowDrillInHeaderProps {
+	readonly contentWidth: number
+	readonly viewLevel: 0 | 1 | 2
+	readonly selectedTraceSummary: TraceSummaryItem | null
+	readonly selectedSpan: TraceItem["spans"][number] | null
+}
+
+const NarrowDrillInHeader = ({ contentWidth, viewLevel, selectedTraceSummary, selectedSpan }: NarrowDrillInHeaderProps) => (
+	<>
+		<box paddingLeft={1} paddingRight={1} height={1} flexDirection="column">
+			<TextLine>
+				<span fg={colors.muted}>TRACES</span>
+				{selectedTraceSummary ? (
+					<>
+						<span fg={colors.separator}>{"  "}{SEPARATOR}{"  "}</span>
+						<span fg={viewLevel === 1 ? colors.accent : colors.muted}>{selectedTraceSummary.rootOperationName}</span>
+					</>
+				) : null}
+				{viewLevel === 2 && selectedSpan ? (
+					<>
+						<span fg={colors.separator}>{"  "}{SEPARATOR}{"  "}</span>
+						<span fg={colors.accent}>{selectedSpan.operationName}</span>
+					</>
+				) : null}
+			</TextLine>
+		</box>
+		<Divider width={contentWidth} />
+	</>
+)
 
 interface TraceWorkspaceProps {
 	readonly layout: AppLayout
@@ -36,6 +201,8 @@ interface TraceWorkspaceProps {
 	readonly selectedSpan: TraceItem["spans"][number] | null
 	readonly selectedSpanLogs: readonly LogItem[]
 	readonly selectedAttrIndex: number
+	readonly chatScrollOffset: number
+	readonly aiCallDetailState: AiCallDetailState
 	readonly selectSpan: (index: number) => void
 }
 
@@ -61,8 +228,11 @@ export const TraceWorkspace = ({
 	selectedSpan,
 	selectedSpanLogs,
 	selectedAttrIndex,
+	chatScrollOffset,
+	aiCallDetailState,
 	selectSpan,
 }: TraceWorkspaceProps) => {
+	const aiDrillIn = selectedSpan !== null && isAiSpan(selectedSpan.tags)
 	const {
 		contentWidth,
 		headerFooterWidth,
@@ -81,36 +251,34 @@ export const TraceWorkspace = ({
 		narrowTraceListBodyHeight,
 		availableContentHeight,
 	} = layout
+	const traceDetailsProps: SharedTraceDetailsProps = {
+		trace: selectedTrace,
+		traceSummary: selectedTraceSummary,
+		traceStatus: traceDetailState.status,
+		traceError: traceDetailState.error,
+		traceLogsState: logState,
+		selectedSpanIndex,
+		collapsedSpanIds,
+		waterfallFilterMode,
+		waterfallFilterText,
+		onSelectSpan: selectSpan,
+	}
+	const drillInContentWidth = Math.max(24, contentWidth - 2)
 
 	if (detailView === "service-logs") {
 		return (
-			<box flexGrow={1} flexDirection="column" paddingLeft={1} paddingRight={1}>
-				<AlignedHeaderLine
-					left="SERVICE LOGS"
-					right={`${serviceLogState.data.length} logs${serviceLogState.fetchedAt ? `${SEPARATOR}${formatShortDate(serviceLogState.fetchedAt)} ${formatTimestamp(serviceLogState.fetchedAt)}` : ""}`}
-					width={headerFooterWidth}
-					rightFg={colors.count}
-				/>
-				<TextLine>
-					<span fg={colors.defaultService}>{selectedTraceService ?? "unknown"}</span>
-					<span fg={colors.separator}>{SEPARATOR}</span>
-					<span fg={colors.count}>recent logs</span>
-				</TextLine>
-				<BlankRow />
-				<ServiceLogsView
-					serviceName={selectedTraceService}
-					logsState={serviceLogState}
-					selectedIndex={selectedServiceLogIndex}
-					onSelectLog={setSelectedServiceLogIndex}
-					contentWidth={headerFooterWidth}
-					bodyLines={Math.max(8, availableContentHeight - 3)}
-				/>
-			</box>
+			<ServiceLogsScene
+				selectedTraceService={selectedTraceService}
+				serviceLogState={serviceLogState}
+				selectedServiceLogIndex={selectedServiceLogIndex}
+				setSelectedServiceLogIndex={setSelectedServiceLogIndex}
+				headerFooterWidth={headerFooterWidth}
+				availableContentHeight={availableContentHeight}
+			/>
 		)
 	}
 
 	if (isWideLayout) {
-		// L0: list (left) + trace preview (right). The two-pane zoom.
 		if (viewLevel === 0) {
 			return (
 				<box flexGrow={1} flexDirection="row">
@@ -127,46 +295,28 @@ export const TraceWorkspace = ({
 					</box>
 					<SeparatorColumn height={wideBodyHeight} junctionChars={separatorJunctionChars} />
 					<box width={rightPaneWidth} height={wideBodyHeight} flexDirection="column">
-						<TraceDetailsPane
-							trace={selectedTrace}
-							traceSummary={selectedTraceSummary}
-							traceStatus={traceDetailState.status}
-							traceError={traceDetailState.error}
-							traceLogsState={logState}
+						<TraceDetailsScene
+							{...traceDetailsProps}
 							contentWidth={rightContentWidth}
 							bodyLines={wideBodyLines}
 							paneWidth={rightPaneWidth}
-							selectedSpanIndex={selectedSpanIndex}
-							collapsedSpanIds={collapsedSpanIds}
 							focused={false}
-							waterfallFilterMode={waterfallFilterMode} waterfallFilterText={waterfallFilterText} onSelectSpan={selectSpan}
 						/>
 					</box>
 				</box>
 			)
 		}
 
-		// L1: the user drilled into a trace — hide the list entirely and show
-		// waterfall (60%) alongside a live span preview (40%). The preview
-		// updates as j/k moves selection in the waterfall; it's read-only at
-		// this phase (no independent focus — that's Phase 2).
 		if (viewLevel === 1) {
 			return (
 				<box flexGrow={1} flexDirection="row">
 					<box width={leftPaneWidth} height={wideBodyHeight} flexDirection="column">
-						<TraceDetailsPane
-							trace={selectedTrace}
-							traceSummary={selectedTraceSummary}
-							traceStatus={traceDetailState.status}
-							traceError={traceDetailState.error}
-							traceLogsState={logState}
+						<TraceDetailsScene
+							{...traceDetailsProps}
 							contentWidth={leftContentWidth}
 							bodyLines={wideBodyLines}
 							paneWidth={leftPaneWidth}
-							selectedSpanIndex={selectedSpanIndex}
-							collapsedSpanIds={collapsedSpanIds}
 							focused={true}
-							waterfallFilterMode={waterfallFilterMode} waterfallFilterText={waterfallFilterText} onSelectSpan={selectSpan}
 						/>
 					</box>
 					<SeparatorColumn height={wideBodyHeight} junctionChars={separatorCrossChars} />
@@ -185,14 +335,14 @@ export const TraceWorkspace = ({
 			)
 		}
 
-		// L2: full-screen span content. Waterfall + trace list are both
-		// hidden; the selected span's tags fill the pane, scrollable with
-		// j/k. Enter drills here from L1; esc goes back.
 		return (
 			<box flexGrow={1} flexDirection="column">
-				<SpanContentView
-					span={selectedSpan}
-					contentWidth={Math.max(24, contentWidth - 2)}
+				<SpanDrillInScene
+					aiDrillIn={aiDrillIn}
+					selectedSpan={selectedSpan}
+					aiCallDetailState={aiCallDetailState}
+					chatScrollOffset={chatScrollOffset}
+					contentWidth={drillInContentWidth}
 					bodyLines={wideBodyLines}
 					paneWidth={contentWidth}
 					selectedAttrIndex={selectedAttrIndex}
@@ -214,19 +364,12 @@ export const TraceWorkspace = ({
 					padding={sectionPadding}
 				/>
 				<Divider width={contentWidth} />
-				<TraceDetailsPane
-					trace={selectedTrace}
-					traceSummary={selectedTraceSummary}
-					traceStatus={traceDetailState.status}
-					traceError={traceDetailState.error}
-					traceLogsState={logState}
+				<TraceDetailsScene
+					{...traceDetailsProps}
 					contentWidth={rightContentWidth}
 					bodyLines={narrowBodyLines}
 					paneWidth={contentWidth}
-					selectedSpanIndex={selectedSpanIndex}
-					collapsedSpanIds={collapsedSpanIds}
 					focused={false}
-					waterfallFilterMode={waterfallFilterMode} waterfallFilterText={waterfallFilterText} onSelectSpan={selectSpan}
 				/>
 			</>
 		)
@@ -234,43 +377,27 @@ export const TraceWorkspace = ({
 
 	return (
 		<>
-			<box paddingLeft={1} paddingRight={1} height={1} flexDirection="column">
-				<TextLine>
-					<span fg={colors.muted}>TRACES</span>
-					{selectedTraceSummary ? (
-						<>
-							<span fg={colors.separator}>{"  "}{SEPARATOR}{"  "}</span>
-							<span fg={viewLevel === 1 ? colors.accent : colors.muted}>{selectedTraceSummary.rootOperationName}</span>
-						</>
-					) : null}
-					{viewLevel === 2 && selectedSpan ? (
-						<>
-							<span fg={colors.separator}>{"  "}{SEPARATOR}{"  "}</span>
-							<span fg={colors.accent}>{selectedSpan.operationName}</span>
-						</>
-					) : null}
-				</TextLine>
-			</box>
-			<Divider width={contentWidth} />
+			<NarrowDrillInHeader
+				contentWidth={contentWidth}
+				viewLevel={viewLevel}
+				selectedTraceSummary={selectedTraceSummary}
+				selectedSpan={selectedSpan}
+			/>
 			{viewLevel === 1 ? (
-				<TraceDetailsPane
-					trace={selectedTrace}
-					traceSummary={selectedTraceSummary}
-					traceStatus={traceDetailState.status}
-					traceError={traceDetailState.error}
-					traceLogsState={logState}
+				<TraceDetailsScene
+					{...traceDetailsProps}
 					contentWidth={rightContentWidth}
 					bodyLines={narrowFullBodyLines}
 					paneWidth={contentWidth}
-					selectedSpanIndex={selectedSpanIndex}
-					collapsedSpanIds={collapsedSpanIds}
 					focused={true}
-					waterfallFilterMode={waterfallFilterMode} waterfallFilterText={waterfallFilterText} onSelectSpan={selectSpan}
 				/>
 			) : (
-				<SpanContentView
-					span={selectedSpan}
-					contentWidth={Math.max(24, contentWidth - 2)}
+				<SpanDrillInScene
+					aiDrillIn={aiDrillIn}
+					selectedSpan={selectedSpan}
+					aiCallDetailState={aiCallDetailState}
+					chatScrollOffset={chatScrollOffset}
+					contentWidth={drillInContentWidth}
 					bodyLines={narrowFullBodyLines}
 					paneWidth={contentWidth}
 					selectedAttrIndex={selectedAttrIndex}
