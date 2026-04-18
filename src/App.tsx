@@ -7,6 +7,7 @@ import { Divider, FooterHints, HelpModal, PlainLine, SplitDivider, TextLine } fr
 import { useAppLayout } from "./ui/app/useAppLayout.ts"
 import { useTraceScreenData } from "./ui/app/useTraceScreenData.ts"
 import { TraceWorkspace } from "./ui/app/TraceWorkspace.tsx"
+import { startupBenchMark } from "./startupBench.js"
 import {
 	type AttrFacetState,
 	attrPickerIndexAtom,
@@ -31,6 +32,8 @@ import { useAttrFilterPicker } from "./ui/useAttrFilterPicker.ts"
 import { getVisibleSpans } from "./ui/waterfallModel.ts"
 
 const NOTICE_TIMEOUT_MS = 2500
+
+startupBenchMark("app_module_loaded")
 
 const buildHeaderModel = ({
 	headerFooterWidth,
@@ -177,6 +180,7 @@ const AppOverlays = ({
 )
 
 export const App = () => {
+	startupBenchMark("app_render_started")
 	const { width, height } = useTerminalDimensions()
 	const [notice, setNotice] = useAtom(noticeAtom)
 	const [selectedTheme] = useAtom(selectedThemeAtom)
@@ -261,6 +265,10 @@ export const App = () => {
 		persistSelectedTheme(selectedTheme)
 	}, [selectedTheme])
 
+	useEffect(() => {
+		startupBenchMark("app_effects_committed")
+	}, [])
+
 	const { spanNavActive } = useKeyboardNav({
 		selectedTrace,
 		filteredTraces,
@@ -337,6 +345,7 @@ export const App = () => {
 	// above an empty column and leaves a visible stale sliver when
 	// toggling tab back and forth with the trace view.
 	const showSplit = isWideLayout && detailView !== "service-logs"
+	startupBenchMark("app_render_ready")
 
 	return (
 		<box width={width ?? 100} height={height ?? 24} flexGrow={1} flexDirection="column" backgroundColor={RGBA.fromHex(colors.screenBg)}>

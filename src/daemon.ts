@@ -10,6 +10,7 @@ const DEFAULT_PORT = 27686
 const START_TIMEOUT_MS = 30_000
 const STOP_TIMEOUT_MS = 10_000
 const LOCK_TIMEOUT_MS = 10_000
+const START_POLL_INTERVAL_MS = 25
 const POLL_INTERVAL_MS = 150
 /** Fast probe used inside the waitForHealthy poll loop — we call it
  *  every POLL_INTERVAL_MS, so a generous budget would stall the loop. */
@@ -329,7 +330,7 @@ export const createDaemonManager = (options: DaemonOptions = {}): DaemonManager 
 				}
 				throw new Error(`Daemon process ${pid} exited before becoming healthy. See ${config.logPath}.`)
 			}
-			await sleep(POLL_INTERVAL_MS)
+			await sleep(START_POLL_INTERVAL_MS)
 		}
 		throw new Error(`Timed out waiting for daemon health at ${config.baseUrl}/api/health. See ${config.logPath}.`)
 	}

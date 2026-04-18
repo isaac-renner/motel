@@ -68,6 +68,7 @@
     "web:dev": "bun run --cwd web dev",
     "web:build": "bun run --cwd web build",
     "story:chat": "bun run src/storybook/aiChatStory.tsx",
+    "bench:motel-cold-start": "bun run scripts/bench-motel-cold-start.ts",
     "typecheck": "tsc --noEmit",
     "prepublishOnly": "bun run web:build"
   },
