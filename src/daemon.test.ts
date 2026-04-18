@@ -80,6 +80,66 @@ afterEach(async () => {
 })
 
 describe("daemon manager", () => {
+	test("warm-start via registry is fast even when HTTP health is slow", async () => {
+		// The failure mode we're preventing: a fully-healthy motel daemon
+		// is alive for our cwd, but its /api/health response queues
+		// behind heavy OTLP ingest traffic and takes >1s (seen on this
+		// machine: /api/health taking 4s under real load). With an
+		// HTTP-only probe the TUI would stall for seconds on every
+		// launch; the registry-based fast path should close in <100ms.
+		const harness = makeHarness()
+		activeHarnesses.push(harness)
+
+		// Scope the motel registry to the harness's runtime dir so we
+		// neither read nor pollute the user's real ~/.local/state/motel.
+		const registryRoot = path.join(harness.runtimeDir, "state")
+		const originalXdg = process.env.XDG_STATE_HOME
+		process.env.XDG_STATE_HOME = registryRoot
+		const registryInstancesDir = path.join(registryRoot, "motel", "instances")
+		fs.mkdirSync(registryInstancesDir, { recursive: true })
+
+		// Seed an entry that points at THIS test process. It's alive
+		// (we're executing), so isAlive(pid) will report true — the
+		// supervisor's fast path will adopt without ever issuing an
+		// HTTP request.
+		const entryPath = path.join(registryInstancesDir, `${process.pid}.json`)
+		fs.writeFileSync(entryPath, JSON.stringify({
+			pid: process.pid,
+			url: `http://127.0.0.1:${harness.port}`,
+			workdir: process.cwd(),
+			startedAt: new Date().toISOString(),
+			version: "0.0.0-test",
+			databasePath: harness.databasePath,
+		}), "utf8")
+
+		// Park a real-but-slow listener on the port. If the supervisor
+		// ever falls back to HTTP we'd wait out the 5s delay; a passing
+		// test proves the fast path took over.
+		const fake = startFakeDaemon({
+			port: harness.port,
+			databasePath: harness.databasePath,
+			delayMs: 5_000,
+		})
+
+		try {
+			const start = performance.now()
+			const status = await Effect.runPromise(harness.manager.ensure)
+			const elapsed = performance.now() - start
+			expect(status.running).toBe(true)
+			expect(status.managed).toBe(true)
+			expect(status.pid).toBe(process.pid)
+			// Generous — real-world is <10ms. Primarily guarding against
+			// a future regression that silently reintroduces an HTTP probe
+			// on the hot path.
+			expect(elapsed).toBeLessThan(500)
+		} finally {
+			fake.stop()
+			fs.rmSync(entryPath, { force: true })
+			if (originalXdg === undefined) delete process.env.XDG_STATE_HOME
+			else process.env.XDG_STATE_HOME = originalXdg
+		}
+	})
+
 	test("adopts a slow-to-respond healthy daemon instead of spawning a duplicate", async () => {
 		// Reproduces the `bun dev` EADDRINUSE flake. A real daemon is alive
 		// and holds the port, but its /api/health response takes longer

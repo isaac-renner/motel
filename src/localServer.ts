@@ -675,6 +675,10 @@ export const startLocalServer = async () => {
 			workdir: process.cwd(),
 			startedAt,
 			version: MOTEL_VERSION,
+			// Published so the supervisor can do a full
+			// workdir + databasePath mismatch check off the
+			// registry alone, with no HTTP round-trip.
+			databasePath: config.otel.databasePath,
 		})
 	} catch (err) {
 		console.warn(`motel: failed to write registry entry: ${(err as Error).message}`)

@@ -2,7 +2,7 @@ import * as fs from "node:fs"
 import { promises as fsp } from "node:fs"
 import * as path from "node:path"
 import { Effect } from "effect"
-import { listAliveEntries, MOTEL_SERVICE_ID, type RegistryEntry, isAlive } from "./registry.js"
+import { isAlive, listAliveEntries, MOTEL_SERVICE_ID, type RegistryEntry } from "./registry.js"
 
 const DEFAULT_REPO_ROOT = path.resolve(import.meta.dir, "..")
 const DEFAULT_RUNTIME_DIR = path.join(DEFAULT_REPO_ROOT, ".motel-data")
@@ -169,6 +169,62 @@ export const createDaemonManager = (options: DaemonOptions = {}): DaemonManager 
 		return null
 	}
 
+	/**
+	 * Mismatch check against a registry entry — mirrors describeManagedMismatch
+	 * but drives off the registry file instead of an HTTP health response.
+	 * Used on the fast path in getStatus so warm-start doesn't need to wait
+	 * on an HTTP round-trip that may queue behind heavy OTLP ingest.
+	 *
+	 * The service-id check is implicit: any entry living in the motel
+	 * registry dir is by construction a motel daemon. databasePath is
+	 * optional for back-compat with entries written by older builds;
+	 * when absent we skip the DB check rather than refusing to adopt.
+	 */
+	const describeRegistryMismatch = (entry: RegistryEntry): string | null => {
+		if (!cwdMatches(entry.workdir)) {
+			return `Port ${config.port} is serving motel for ${entry.workdir}, not ${process.cwd()}.`
+		}
+		if (entry.databasePath && entry.databasePath !== config.databasePath) {
+			return `Port ${config.port} is serving motel with ${entry.databasePath}, expected ${config.databasePath}.`
+		}
+		return null
+	}
+
+	/**
+	 * Build a DaemonStatus from a live registry entry. Returns null when
+	 * there's no entry for our cwd, the registered pid isn't running, or
+	 * the entry is for a differently-configured daemon (different port).
+	 * This is the fast path: no HTTP, no event-loop round-trip, just a
+	 * directory read and a process.kill(pid, 0) liveness probe.
+	 */
+	const getStatusFromRegistry = (): DaemonStatus | null => {
+		const entry = readRegistryEntry()
+		if (!entry) return null
+		// Port discriminator: a motel registry shared across several
+		// daemons (e.g., user running two instances on different
+		// ports from the same workdir, or a test harness on a random
+		// port) would otherwise have us adopt an unrelated daemon.
+		// URL match is a fast, unambiguous identity check.
+		if (entry.url !== config.baseUrl) return null
+		const mismatch = describeRegistryMismatch(entry)
+		return {
+			running: mismatch === null,
+			managed: mismatch === null,
+			service: MOTEL_SERVICE_ID,
+			pid: entry.pid,
+			url: entry.url,
+			databasePath: entry.databasePath ?? config.databasePath,
+			workdir: entry.workdir,
+			startedAt: entry.startedAt,
+			version: entry.version,
+			sameWorkdir: cwdMatches(entry.workdir),
+			reason: mismatch,
+			logPath: config.logPath,
+			lockPath: config.lockPath,
+			registryPid: entry.pid,
+		}
+	}
+
 	const readLock = async (): Promise<LockShape | null> => {
 		try {
 			const raw = await fsp.readFile(config.lockPath, "utf8")
@@ -268,6 +324,21 @@ export const createDaemonManager = (options: DaemonOptions = {}): DaemonManager 
 	}
 
 	const getStatus = async (timeoutMs: number = HEALTH_FAST_TIMEOUT_MS): Promise<DaemonStatus> => {
+		// Fast path: trust the local filesystem registry. When a motel
+		// daemon started on this machine it wrote an entry for its pid
+		// + cwd + databasePath; if that entry is still there and the pid
+		// is alive, the daemon is almost certainly the one we want to
+		// adopt. HTTP health is skipped because the daemon's health
+		// endpoint can queue behind heavy OTLP ingest traffic, making
+		// the probe unreliable exactly when the daemon is busy.
+		const registryStatus = getStatusFromRegistry()
+		if (registryStatus) return registryStatus
+
+		// No local evidence → fall back to HTTP. Covers the edge cases
+		// where: a motel daemon is running but was started before this
+		// registry-first path shipped; OR the port is held by something
+		// entirely unrelated (the mismatch check turns that into a
+		// human-readable reason).
 		const registry = readRegistryEntry()
 		const health = await fetchHealth(timeoutMs)
 		if (!health) {

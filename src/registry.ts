@@ -16,6 +16,14 @@ export type RegistryEntry = {
 	readonly workdir: string
 	readonly startedAt: string
 	readonly version: string
+	/**
+	 * The SQLite database path the daemon is serving. Optional because
+	 * older daemon builds omit it; consumers should treat a missing
+	 * value as "unknown" and fall back to whatever validation path
+	 * they would have used before this field existed (typically an
+	 * HTTP /api/health probe).
+	 */
+	readonly databasePath?: string
 }
 
 const entryPath = (pid: number) => path.join(registryDir(), `${pid}.json`)
