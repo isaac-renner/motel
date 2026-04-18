@@ -797,9 +797,66 @@ export const makeTelemetryStoreLayer = (opts: TelemetryStoreOptions) => Layer.ef
 
 		const deleteSpanAttributes = db.query(`DELETE FROM span_attributes WHERE trace_id = ? AND span_id = ?`)
 		const insertSpanAttribute = db.query(`INSERT INTO span_attributes (trace_id, span_id, key, value) VALUES (?, ?, ?, ?)`)
+		const spanAttributeInsertManyByCount = new Map<number, ReturnType<Database["query"]>>()
+		const insertSpanAttributesMany = (traceId: string, spanId: string, attributes: Readonly<Record<string, string>>) => {
+			const entries = Object.entries(attributes)
+			if (entries.length === 0) return
+			if (entries.length === 1) {
+				const [key, value] = entries[0]!
+				insertSpanAttribute.run(traceId, spanId, key, value)
+				return
+			}
+			let query = spanAttributeInsertManyByCount.get(entries.length)
+			if (!query) {
+				query = db.query(`INSERT INTO span_attributes (trace_id, span_id, key, value) VALUES ${entries.map(() => "(?, ?, ?, ?)").join(", ")}`)
+				spanAttributeInsertManyByCount.set(entries.length, query)
+			}
+			query.run(...entries.flatMap(([key, value]) => [traceId, spanId, key, value]))
+		}
 		const deleteSpanOperationSearch = db.query(`DELETE FROM span_operation_fts WHERE trace_id = ? AND span_id = ?`)
 		const insertSpanOperationSearch = db.query(`INSERT INTO span_operation_fts (trace_id, span_id, operation_name) VALUES (?, ?, ?)`)
+		const deleteSpanOperationSearchManyByCount = new Map<number, ReturnType<Database["query"]>>()
+		const insertSpanOperationSearchManyByCount = new Map<number, ReturnType<Database["query"]>>()
+		const updateSpanOperationSearchMany = (operations: ReadonlyArray<readonly [string, string, string]>) => {
+			if (operations.length === 0) return
+			if (operations.length === 1) {
+				const [traceId, spanId, operationName] = operations[0]!
+				deleteSpanOperationSearch.run(traceId, spanId)
+				insertSpanOperationSearch.run(traceId, spanId, operationName)
+				return
+			}
+
+			let deleteQuery = deleteSpanOperationSearchManyByCount.get(operations.length)
+			if (!deleteQuery) {
+				deleteQuery = db.query(`DELETE FROM span_operation_fts WHERE ${operations.map(() => "(trace_id = ? AND span_id = ?)").join(" OR ")}`)
+				deleteSpanOperationSearchManyByCount.set(operations.length, deleteQuery)
+			}
+			deleteQuery.run(...operations.flatMap(([traceId, spanId]) => [traceId, spanId]))
+
+			let insertQuery = insertSpanOperationSearchManyByCount.get(operations.length)
+			if (!insertQuery) {
+				insertQuery = db.query(`INSERT INTO span_operation_fts (trace_id, span_id, operation_name) VALUES ${operations.map(() => "(?, ?, ?)").join(", ")}`)
+				insertSpanOperationSearchManyByCount.set(operations.length, insertQuery)
+			}
+			insertQuery.run(...operations.flatMap(([traceId, spanId, operationName]) => [traceId, spanId, operationName]))
+		}
 		const insertLogAttribute = db.query(`INSERT INTO log_attributes (log_id, key, value) VALUES (?, ?, ?)`)
+		const logAttributeInsertManyByCount = new Map<number, ReturnType<Database["query"]>>()
+		const insertLogAttributesMany = (logId: number, attributes: Readonly<Record<string, string>>) => {
+			const entries = Object.entries(attributes)
+			if (entries.length === 0) return
+			if (entries.length === 1) {
+				const [key, value] = entries[0]!
+				insertLogAttribute.run(logId, key, value)
+				return
+			}
+			let query = logAttributeInsertManyByCount.get(entries.length)
+			if (!query) {
+				query = db.query(`INSERT INTO log_attributes (log_id, key, value) VALUES ${entries.map(() => "(?, ?, ?)").join(", ")}`)
+				logAttributeInsertManyByCount.set(entries.length, query)
+			}
+			query.run(...entries.flatMap(([key, value]) => [logId, key, value]))
+		}
 		const insertLogBodySearch = db.query(`INSERT INTO log_body_fts (log_id, body) VALUES (?, ?)`)
 
 		const maxDbSizeBytes = config.otel.maxDbSizeMb * 1024 * 1024
@@ -961,6 +1018,7 @@ export const makeTelemetryStoreLayer = (opts: TelemetryStoreOptions) => Layer.ef
 				let insertedSpans = 0
 				const transaction = db.transaction((request: OtlpTraceExportRequest) => {
 					const touchedTraceIds = new Set<string>()
+					const touchedOperations: Array<readonly [string, string, string]> = []
 					for (const resourceSpans of request.resourceSpans ?? []) {
 						const resourceAttributes = attributeMap(resourceSpans.resource?.attributes)
 						const serviceName = resourceAttributes["service.name"] || resourceAttributes["service_name"] || "unknown"
@@ -996,19 +1054,20 @@ export const makeTelemetryStoreLayer = (opts: TelemetryStoreOptions) => Layer.ef
 									JSON.stringify(events),
 								)
 								deleteSpanAttributes.run(span.traceId, span.spanId)
-								for (const [key, value] of Object.entries(mergedAttributes)) {
-									insertSpanAttribute.run(span.traceId, span.spanId, key, value)
-								}
-								try {
-									deleteSpanOperationSearch.run(span.traceId, span.spanId)
-									insertSpanOperationSearch.run(span.traceId, span.spanId, span.name ?? "unknown")
-								} catch {
-									// FTS is optional.
-								}
+								insertSpanAttributesMany(span.traceId, span.spanId, mergedAttributes)
+								touchedOperations.push([span.traceId, span.spanId, span.name ?? "unknown"])
 								touchedTraceIds.add(span.traceId)
 								insertedSpans += 1
 							}
 						}
+					}
+					try {
+						const BATCH_SIZE = 500
+						for (let offset = 0; offset < touchedOperations.length; offset += BATCH_SIZE) {
+							updateSpanOperationSearchMany(touchedOperations.slice(offset, offset + BATCH_SIZE))
+						}
+					} catch {
+						// FTS is optional.
 					}
 					for (const traceId of touchedTraceIds) {
 						upsertTraceSummary.run(traceId)
@@ -1048,9 +1107,7 @@ export const makeTelemetryStoreLayer = (opts: TelemetryStoreOptions) => Layer.ef
 									JSON.stringify(resourceAttributes),
 								)
 								const logId = Number((result as { lastInsertRowid: number | bigint }).lastInsertRowid)
-								for (const [key, value] of Object.entries(mergedAttributes)) {
-									insertLogAttribute.run(logId, key, value)
-								}
+								insertLogAttributesMany(logId, mergedAttributes)
 								try {
 									insertLogBodySearch.run(String(logId), body)
 								} catch {
