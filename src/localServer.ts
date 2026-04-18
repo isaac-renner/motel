@@ -12,7 +12,9 @@ import { MotelHttpApi } from "./httpApi.js"
 import { attributeFiltersFromEntries, attributeContainsFiltersFromEntries } from "./queryFilters.js"
 import { MOTEL_SERVICE_ID, MOTEL_VERSION, removeRegistryEntry, writeRegistryEntry } from "./registry.js"
 import { AsyncIngest, AsyncIngestLive } from "./services/AsyncIngest.js"
-import { TelemetryStore, TelemetryStoreLive } from "./services/TelemetryStore.js"
+import { LogQueryService, LogQueryServiceLive } from "./services/LogQueryService.js"
+import { TelemetryStore, TelemetryStoreLive, TelemetryStoreReadonlyLive } from "./services/TelemetryStore.js"
+import { TraceQueryService, TraceQueryServiceLive } from "./services/TraceQueryService.js"
 import type { LogItem, TraceItem, TraceSummaryItem } from "./domain.js"
 import { lifecycleLabel } from "./ui/format.js"
 
@@ -39,6 +41,8 @@ const htmlResponse = (value: string) => HttpServerResponse.html(value)
 const notFoundResponse = (message = "Not found") => jsonResponse({ error: message }, 404)
 const requestUrl = (request: { readonly url: string }) => new URL(request.url, config.otel.baseUrl)
 const withStore = <A>(f: (store: TelemetryStore["Service"]) => Effect.Effect<A, Error>) => Effect.flatMap(TelemetryStore.asEffect(), f)
+const withTraceQuery = <A>(f: (query: TraceQueryService["Service"]) => Effect.Effect<A, Error>) => Effect.flatMap(TraceQueryService.asEffect(), f)
+const withLogQuery = <A>(f: (query: LogQueryService["Service"]) => Effect.Effect<A, Error>) => Effect.flatMap(LogQueryService.asEffect(), f)
 // Response-building helpers are generic in R so a handler can depend
 // on TelemetryStore (query path) or AsyncIngest (worker-RPC path)
 // without forcing every handler onto the same service surface.
@@ -149,7 +153,7 @@ const loadLogsPage = (input: {
 	readonly lookbackMinutes: number
 	readonly cursor: CursorShape | null
 }) =>
-	Effect.flatMap(TelemetryStore.asEffect(), (store) =>
+	Effect.flatMap(LogQueryService.asEffect(), (store) =>
 		Effect.map(
 			store.searchLogs({
 				serviceName: input.serviceName,
@@ -312,7 +316,7 @@ const TelemetryGroupLive = HttpApiBuilder.group(
 					),
 				),
 			)
-			.handleRaw("services", () => respondJson(Effect.map(withStore((store) => store.listServices), (data) => ({ data }))))
+			.handleRaw("services", () => respondJson(Effect.map(withTraceQuery((store) => store.listServices), (data) => ({ data }))))
 			.handleRaw("traces", ({ request }) =>
 				respondRaw(Effect.gen(function*() {
 					const url = requestUrl(request)
@@ -320,7 +324,7 @@ const TelemetryGroupLive = HttpApiBuilder.group(
 					const limit = parseBoundedLimit(url.searchParams.get("limit"), TRACE_DEFAULT_LIMIT, TRACE_MAX_LIMIT)
 					const lookbackMinutes = parseBoundedLookbackMinutes(url.searchParams.get("lookback"), TRACE_DEFAULT_LOOKBACK, TRACE_MAX_LOOKBACK)
 					const cursor = decodeCursor(url.searchParams.get("cursor"))
-					const data = yield* withStore((store) => store.listTraceSummaries(service, {
+					const data = yield* withTraceQuery((store) => store.listTraceSummaries(service, {
 						limit: limit + 1,
 						lookbackMinutes,
 						cursorStartedAtMs: cursor?.kind === "trace" ? cursor.startedAt : undefined,
@@ -336,7 +340,7 @@ const TelemetryGroupLive = HttpApiBuilder.group(
 					const limit = parseBoundedLimit(url.searchParams.get("limit"), TRACE_DEFAULT_LIMIT, TRACE_MAX_LIMIT)
 					const lookbackMinutes = parseBoundedLookbackMinutes(url.searchParams.get("lookback"), TRACE_DEFAULT_LOOKBACK, TRACE_MAX_LOOKBACK)
 					const cursor = decodeCursor(url.searchParams.get("cursor"))
-					const data = yield* withStore((store) =>
+					const data = yield* withTraceQuery((store) =>
 						store.searchTraceSummaries({
 							serviceName: url.searchParams.get("service"),
 							operation: url.searchParams.get("operation"),
@@ -363,7 +367,7 @@ const TelemetryGroupLive = HttpApiBuilder.group(
 					if (!groupBy || (agg !== "count" && agg !== "avg_duration" && agg !== "p95_duration" && agg !== "error_rate")) {
 						return jsonResponse({ error: "Expected groupBy and agg=count|avg_duration|p95_duration|error_rate" }, 400)
 					}
-					const data = yield* withStore((store) =>
+					const data = yield* withTraceQuery((store) =>
 						store.traceStats({
 							groupBy,
 							agg,
@@ -386,7 +390,7 @@ const TelemetryGroupLive = HttpApiBuilder.group(
 					const attributeContainsFilters = attributeContainsFiltersFromQuery(url)
 					const limit = parseBoundedLimit(url.searchParams.get("limit"), SPAN_DEFAULT_LIMIT, SPAN_MAX_LIMIT)
 					const lookbackMinutes = parseBoundedLookbackMinutes(url.searchParams.get("lookback"), TRACE_DEFAULT_LOOKBACK, TRACE_MAX_LOOKBACK)
-					const data = yield* withStore((store) =>
+					const data = yield* withTraceQuery((store) =>
 						store.searchSpans({
 							serviceName: url.searchParams.get("service"),
 							traceId: url.searchParams.get("traceId"),
@@ -423,7 +427,7 @@ const TelemetryGroupLive = HttpApiBuilder.group(
 				})),
 			)
 			.handleRaw("traceSpans", ({ params }) =>
-				respondJson(Effect.map(withStore((store) => store.listTraceSpans(params.traceId)), (data) => ({ data }))),
+				respondJson(Effect.map(withTraceQuery((store) => store.listTraceSpans(params.traceId)), (data) => ({ data }))),
 			)
 			.handleRaw("spanLogs", ({ params, request }) =>
 				respondRaw(Effect.gen(function*() {
@@ -436,14 +440,14 @@ const TelemetryGroupLive = HttpApiBuilder.group(
 			)
 			.handleRaw("span", ({ params }) =>
 				respondRaw(
-					Effect.flatMap(withStore((store) => store.getSpan(params.spanId)), (data) =>
+					Effect.flatMap(withTraceQuery((store) => store.getSpan(params.spanId)), (data) =>
 						Effect.succeed(data ? jsonResponse({ data }) : notFoundResponse("Span not found")),
 					),
 				),
 			)
 			.handleRaw("trace", ({ params }) =>
 				respondRaw(
-					Effect.flatMap(withStore((store) => store.getTrace(params.traceId)), (data) =>
+					Effect.flatMap(withTraceQuery((store) => store.getTrace(params.traceId)), (data) =>
 						Effect.succeed(data ? jsonResponse({ data }) : notFoundResponse("Trace not found")),
 					),
 				),
@@ -460,7 +464,7 @@ const TelemetryGroupLive = HttpApiBuilder.group(
 					if (!groupBy || agg !== "count") {
 						return jsonResponse({ error: "Expected groupBy and agg=count" }, 400)
 					}
-					const data = yield* withStore((store) =>
+					const data = yield* withLogQuery((store) =>
 						store.logStats({
 							groupBy,
 							agg: "count",
@@ -508,7 +512,7 @@ const TelemetryGroupLive = HttpApiBuilder.group(
 					if ((type !== "traces" && type !== "logs") || !field) {
 						return jsonResponse({ error: "Expected type=traces|logs and field=<name>" }, 400)
 					}
-					const data = yield* withStore((store) =>
+					const data = yield* withTraceQuery((store) =>
 						store.listFacets({
 							type,
 							field,
@@ -586,9 +590,9 @@ const TelemetryGroupLive = HttpApiBuilder.group(
 			)
 			.handleRaw("tracePage", ({ params }) =>
 				respondRaw(
-					Effect.flatMap(withStore((store) => store.getTrace(params.traceId)), (trace) =>
+					Effect.flatMap(withTraceQuery((store) => store.getTrace(params.traceId)), (trace) =>
 						trace
-							? Effect.map(withStore((store) => store.listTraceLogs(params.traceId)), (logs) => htmlResponse(renderTracePage(trace, logs)))
+							? Effect.map(withLogQuery((store) => store.listTraceLogs(params.traceId)), (logs) => htmlResponse(renderTracePage(trace, logs)))
 							: Effect.succeed(notFoundResponse("Trace not found")),
 					),
 				),
@@ -604,6 +608,10 @@ const TelemetryGroupLive = HttpApiBuilder.group(
 const ApiLayer = HttpApiBuilder.layer(MotelHttpApi, { openapiPath: "/openapi.json" }).pipe(
 	Layer.provide(TelemetryGroupLive),
 	Layer.provide(HttpApiScalar.layer(MotelHttpApi, { scalar: { forceDarkModeState: "dark", showOperationId: true } })),
+)
+
+const QueryServicesLive = Layer.mergeAll(TraceQueryServiceLive, LogQueryServiceLive).pipe(
+	Layer.provideMerge(TelemetryStoreReadonlyLive),
 )
 
 // Web UI: Vite-built SPA served from web/dist. HttpStaticServer.layer
@@ -675,9 +683,11 @@ export const ServerLive = HttpRouter.serve(
 	Layer.provide(HttpMiddleware.layerTracerDisabledForUrls(["/v1/traces", "/v1/logs"])),
 	// AsyncIngest spawns the telemetry worker — keeps the main-thread
 	// event loop free during heavy SQLite writes. Provided alongside
-	// the direct TelemetryStore so query handlers can still resolve
-	// their dependency directly.
+	// the writer TelemetryStore for ingest / maintenance. Query endpoints
+	// resolve through readonly TraceQueryService / LogQueryService so
+	// reads do not contend with the writer connection.
 	Layer.provideMerge(AsyncIngestLive),
+	Layer.provideMerge(QueryServicesLive),
 	Layer.provideMerge(TelemetryStoreLive),
 	Layer.provideMerge(BunHttpServer.layer({
 		port: config.otel.port,

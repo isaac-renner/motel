@@ -1282,6 +1282,8 @@ export const makeTelemetryStoreLayer = (opts: TelemetryStoreOptions) => Layer.ef
 			const candidateLimit = hasContainsFilters ? Math.max(limit * 20, 500) : Math.max(limit * 10, 200)
 
 			return yield* Effect.sync(() => {
+				let fromSql = "FROM spans AS s"
+				const joinParams: Array<string | number> = []
 				const clauses: string[] = ["s.start_time_ms >= ?"]
 				const params: Array<string | number> = [cutoff]
 
@@ -1296,8 +1298,8 @@ export const makeTelemetryStoreLayer = (opts: TelemetryStoreOptions) => Layer.ef
 				if (input.operation) {
 					const ftsQuery = toFtsMatchQuery(input.operation)
 					if (hasFts && ftsQuery) {
-						clauses.push("EXISTS (SELECT 1 FROM span_operation_fts WHERE span_operation_fts.trace_id = s.trace_id AND span_operation_fts.span_id = s.span_id AND span_operation_fts MATCH ?)")
-						params.push(ftsQuery)
+						fromSql += ` INNER JOIN (SELECT trace_id, span_id FROM span_operation_fts WHERE span_operation_fts MATCH ?) AS span_operation_match ON span_operation_match.trace_id = s.trace_id AND span_operation_match.span_id = s.span_id`
+						joinParams.push(ftsQuery)
 					} else {
 						clauses.push("s.operation_name LIKE ? COLLATE NOCASE")
 						params.push(`%${input.operation}%`)
@@ -1321,42 +1323,90 @@ export const makeTelemetryStoreLayer = (opts: TelemetryStoreOptions) => Layer.ef
 				}
 
 				const rows = db.query(`
-					SELECT trace_id, span_id
-					FROM spans AS s
+					SELECT *
+					${fromSql}
 					WHERE ${clauses.join(" AND ")}
 					ORDER BY s.start_time_ms DESC
 					LIMIT ?
-				`).all(...params, candidateLimit) as Array<{ trace_id: string; span_id: string }>
+				`).all(...joinParams, ...params, candidateLimit) as SpanRow[]
 
 				const traceIds = [...new Set(rows.map((row) => row.trace_id))]
 				if (traceIds.length === 0) return [] as readonly SpanItem[]
 
-				const placeholders = traceIds.map(() => "?").join(", ")
-				const spanRows = db.query(`
-					SELECT * FROM spans
-					WHERE trace_id IN (${placeholders})
-					ORDER BY start_time_ms ASC
-				`).all(...traceIds) as SpanRow[]
-
-				const grouped = new Map<string, SpanRow[]>()
-				for (const row of spanRows) {
-					const group = grouped.get(row.trace_id) ?? []
-					group.push(row)
-					grouped.set(row.trace_id, group)
+				const keyOf = (traceId: string, spanId: string) => `${traceId}:${spanId}`
+				const spanContextById = new Map<string, { readonly parentSpanId: string | null; readonly operationName: string }>()
+				for (const row of rows) {
+					spanContextById.set(keyOf(row.trace_id, row.span_id), {
+						parentSpanId: row.parent_span_id,
+						operationName: row.operation_name,
+					})
 				}
 
-				const itemById = new Map<string, SpanItem>()
-				for (const traceId of traceIds) {
-					const traceSpanRows = grouped.get(traceId)
-					if (!traceSpanRows) continue
-					for (const item of buildSpanItems(traceId, traceSpanRows)) {
-						itemById.set(`${item.traceId}:${item.span.spanId}`, item)
+				const placeholders = traceIds.map(() => "?").join(", ")
+				const rootRows = db.query(`
+					SELECT trace_id, operation_name
+					FROM spans
+					WHERE trace_id IN (${placeholders}) AND parent_span_id IS NULL
+					ORDER BY start_time_ms ASC
+				`).all(...traceIds) as Array<{ trace_id: string; operation_name: string }>
+				const rootOperationByTraceId = new Map<string, string>()
+				for (const row of rootRows) {
+					if (!rootOperationByTraceId.has(row.trace_id)) {
+						rootOperationByTraceId.set(row.trace_id, row.operation_name)
 					}
 				}
 
+				const spanContextLookup = db.query(`
+					SELECT parent_span_id, operation_name
+					FROM spans
+					WHERE trace_id = ? AND span_id = ?
+				`)
+
+				const getSpanContext = (traceId: string, spanId: string) => {
+					const key = keyOf(traceId, spanId)
+					const cached = spanContextById.get(key)
+					if (cached !== undefined) return cached
+					const row = spanContextLookup.get(traceId, spanId) as { parent_span_id: string | null; operation_name: string } | null
+					if (!row) return null
+					const value = {
+						parentSpanId: row.parent_span_id,
+						operationName: row.operation_name,
+					}
+					spanContextById.set(key, value)
+					return value
+				}
+
+				const depthById = new Map<string, number>()
+				const getDepth = (traceId: string, spanId: string, visiting = new Set<string>()): number => {
+					const key = keyOf(traceId, spanId)
+					const cached = depthById.get(key)
+					if (cached !== undefined) return cached
+					if (visiting.has(key)) return 0
+					visiting.add(key)
+					const context = getSpanContext(traceId, spanId)
+					const depth = context?.parentSpanId ? getDepth(traceId, context.parentSpanId, visiting) + 1 : 0
+					depthById.set(key, depth)
+					return depth
+				}
+
 				return rows
-					.map((row) => itemById.get(`${row.trace_id}:${row.span_id}`))
-					.filter((item): item is SpanItem => item !== undefined)
+					.map((row) => {
+						const parentContext = row.parent_span_id ? getSpanContext(row.trace_id, row.parent_span_id) : null
+						const parsedSpan = parseSpanRow(row)
+						const span = {
+							...parsedSpan,
+							depth: getDepth(row.trace_id, row.span_id),
+							warnings: row.parent_span_id && !parentContext
+								? [`missing span ${row.parent_span_id} (1 child)`]
+								: parsedSpan.warnings,
+						}
+						return {
+							traceId: row.trace_id,
+							rootOperationName: rootOperationByTraceId.get(row.trace_id) ?? span.operationName,
+							parentOperationName: parentContext?.operationName ?? null,
+							span,
+						} satisfies SpanItem
+					})
 					.filter((item) => {
 						if (input.parentOperation) {
 							const needle = input.parentOperation.toLowerCase()
