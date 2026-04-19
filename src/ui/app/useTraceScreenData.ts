@@ -13,6 +13,7 @@ import {
 	detailViewAtom,
 	ensureAiCallDetail,
 	ensureTraceAttributeKeys,
+	ensureTraceAttributeValues,
 	filterModeAtom,
 	filterTextAtom,
 	getCachedAiCallDetail,
@@ -169,11 +170,20 @@ export const useTraceScreenData = () => {
 	}, [refreshNonce])
 
 	// Pre-warm the attribute picker facet keys for the currently-selected
-	// service so pressing `f` feels instant. Fire-and-forget; errors are
-	// surfaced when the user actually opens the picker.
+	// service so pressing `f` feels instant. Once keys are known, also
+	// prefetch the value lists for the first few visible keys so the common
+	// path of opening `f`, picking a top key, and reopening again stays
+	// near-instant. Fire-and-forget; errors are surfaced when the user
+	// actually opens the picker.
 	useEffect(() => {
 		if (!selectedTraceService) return
-		void ensureTraceAttributeKeys(selectedTraceService).catch(() => {})
+		void ensureTraceAttributeKeys(selectedTraceService)
+			.then((entry) => Promise.allSettled(
+				entry.data
+					.slice(0, 6)
+					.map((row) => ensureTraceAttributeValues(selectedTraceService, row.value)),
+			))
+			.catch(() => {})
 	}, [selectedTraceService])
 
 	useEffect(() => {
