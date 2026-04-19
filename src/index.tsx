@@ -2,7 +2,7 @@ import { RegistryProvider } from "@effect/atom-react"
 import { createCliRenderer } from "@opentui/core"
 import { createRoot } from "@opentui/react"
 import { startupBenchMark } from "./startupBench.js"
-import { App } from "./App.js"
+import { StartupGate } from "./StartupGate.js"
 
 startupBenchMark("index_module_loaded")
 
@@ -18,7 +18,7 @@ startupBenchMark("renderer_ready")
 
 createRoot(renderer).render(
 	<RegistryProvider>
-		<App />
+		<StartupGate />
 	</RegistryProvider>,
 )
 

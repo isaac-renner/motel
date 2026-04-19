@@ -12,7 +12,6 @@ case undefined:
 case "tui":
 case "ui": {
 	await run(applyManagedDaemonEnv)
-	await run(ensureManagedDaemon)
 	await import("./index.js")
 	break
 }
@@ -42,7 +41,6 @@ case "restart": {
 	// and want the TUI to reconnect to the new binary in one command.
 	await run(stopManagedDaemon)
 	await run(applyManagedDaemonEnv)
-	await run(ensureManagedDaemon)
 	await import("./index.js")
 	break
 }
