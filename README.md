@@ -52,6 +52,52 @@ for any Effect/OTEL app you want to trace.
 
 Requirements: [Bun](https://bun.sh/) v1.1 or newer.
 
+## Nix / Home Manager
+
+This repo now exposes a Nix package (`packages.<system>.default`) and an
+overlay (`overlays.default`). It also provides a dev shell with Bun:
+
+```bash
+nix develop
+```
+
+Flake-based Home Manager:
+
+```nix
+{
+  inputs = {
+    motel.url = "github:kitlangton/motel";
+  };
+
+  outputs = { self, nixpkgs, home-manager, motel, ... }:
+    let
+      system = "aarch64-darwin";
+      pkgs = import nixpkgs { inherit system; };
+    in {
+      homeConfigurations.me = home-manager.lib.homeManagerConfiguration {
+        inherit pkgs;
+        modules = [
+          {
+            home.packages = [
+              motel.packages.${system}.default
+            ];
+          }
+        ];
+      };
+    };
+}
+```
+
+The Nix package pins Bun dependencies via a fixed-output `node_modules`
+derivation inside `flake.nix`.
+
+If `bun.lock` changes, refresh the hash:
+
+```bash
+nix build .#motel
+# copy the "got: sha256-..." value into flake.nix outputHash
+```
+
 ## How your app connects
 
 Once motel is running, point your app's OTLP/HTTP exporters at these
